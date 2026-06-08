@@ -440,3 +440,360 @@ def foto_notiz():
     data = request.json or {}
     sb_update("foto_empfehlungen", f"id=eq.{data.get('id')}", {"notiz": data.get("notiz", "")})
     return jsonify({"success": True})
+
+
+# ════════════════════════════════════════
+# PROSPEKT AGENT
+# Erstellt druckfertige PDFs für verschiedene Zielgruppen
+# ════════════════════════════════════════
+
+PROSPEKT_TEMPLATES = {
+    "Feinkost": {
+        "titel": "Honigspirituosen für Ihr Sortiment",
+        "untertitel": "Handwerkliche Premium-Spirituosen aus Wien",
+        "ansprache": "Sehr geehrte Damen und Herren",
+        "intro": "Wir sind ein Wiener Familienbetrieb – Berufsimker trifft Destillateur. Unsere Spirituosen werden mit eigenem Honig veredelt und sprechen Kunden an, die Qualität zu schätzen wissen.",
+        "cta": "Vereinbaren Sie einen unverbindlichen Verkostungstermin.",
+        "farbe": "#1a1a1a"
+    },
+    "Bar": {
+        "titel": "Neue Dimension für Ihre Cocktailkarte",
+        "untertitel": "Honig-veredelte Spirituosen aus Wien",
+        "ansprache": "Liebe Bartender & Gastronomen",
+        "intro": "Wacholdergold, Fassgold und Inselgold – drei Spirituosen die Honig nicht süß machen, sondern runder. Perfekt für Signature Cocktails die in Erinnerung bleiben.",
+        "cta": "Wir kommen gerne zur Verkostung in Ihre Bar.",
+        "farbe": "#1a1a1a"
+    },
+    "Hotel": {
+        "titel": "Exklusiv für Ihre Gäste",
+        "untertitel": "Wiener Premium-Spirituosen als besonderes Erlebnis",
+        "ansprache": "Sehr geehrte Damen und Herren",
+        "intro": "Bieten Sie Ihren Gästen etwas Besonderes: authentische Wiener Handwerkskunst in der Flasche. Honig-veredelte Spirituosen mit einer Geschichte die man gerne weitererzählt.",
+        "cta": "Sprechen Sie uns für Exklusivkonditionen an.",
+        "farbe": "#1a1a1a"
+    },
+    "Markt": {
+        "titel": "🍯 Honigspirituosen",
+        "untertitel": "Direkt vom Imker – handgemacht in Wien",
+        "ansprache": "Liebe Freunde guter Spirituosen",
+        "intro": "Ich bin Josef, Berufsimker aus Wien. Meine Bienen liefern den Honig, ich veredle damit Gin, Whisky und Rum. Kein Likör – echte Spirituosen mit Charakter.",
+        "cta": "Probieren Sie gerne vor Ort! Alle Produkte heute erhältlich.",
+        "farbe": "#B8860B"
+    }
+}
+
+PRODUKTE = [
+    {
+        "name": "Wacholdergold",
+        "typ": "Gin",
+        "beschreibung": "Frisch, klar, mit feiner Honigrunde. Perfekt für Gin Tonic oder pur.",
+        "preis": "€ 39,90",
+        "bild": "https://honigspirituosen.at/wp-content/uploads/2024/01/wacholdergold.jpg"
+    },
+    {
+        "name": "Fassgold",
+        "typ": "Whisky",
+        "beschreibung": "Warm, tief, komplex. Erhältlich mit Blütenhonig, Edelkastanie, Linde oder Sonnenblume.",
+        "preis": "€ 44,00",
+        "bild": "https://honigspirituosen.at/wp-content/uploads/2024/01/fassgold.jpg"
+    },
+    {
+        "name": "Inselgold",
+        "typ": "Rum",
+        "beschreibung": "Warm, entspannt, weich. Der Honig macht ihn runder – nicht süßer.",
+        "preis": "€ 34,90",
+        "bild": "https://honigspirituosen.at/wp-content/uploads/2024/01/inselgold.jpg"
+    }
+]
+
+SPRACHEN = {
+    "de": {
+        "produkte": "Unsere Produkte",
+        "claim": "Du erwartest Süße – du bekommst Charakter.",
+        "kontakt": "Kontakt",
+        "website": "Website",
+        "kein_likoer": "Kein Likör. Keine dominante Süße.",
+        "handgemacht": "Handgemacht in Wien"
+    },
+    "en": {
+        "produkte": "Our Products",
+        "claim": "You expect sweetness – you get character.",
+        "kontakt": "Contact",
+        "website": "Website",
+        "kein_likoer": "Not a liqueur. No dominant sweetness.",
+        "handgemacht": "Handcrafted in Vienna"
+    }
+}
+
+def generate_prospekt_html(zielgruppe, sprache="de"):
+    """Generiert HTML für das Prospekt"""
+    tmpl = PROSPEKT_TEMPLATES.get(zielgruppe, PROSPEKT_TEMPLATES["Feinkost"])
+    lang = SPRACHEN.get(sprache, SPRACHEN["de"])
+    
+    produkte_html = ""
+    for p in PRODUKTE:
+        produkte_html += f"""
+        <div class="produkt">
+            <div class="produkt-name">{p['name']}</div>
+            <div class="produkt-typ">{p['typ']}</div>
+            <div class="produkt-desc">{p['beschreibung']}</div>
+            <div class="produkt-preis">{p['preis']}</div>
+        </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,400&family=Lato:wght@300;400&display=swap');
+  
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  
+  body {{
+    font-family: 'Lato', sans-serif;
+    background: #fff;
+    color: #1a1a1a;
+    width: 210mm;
+    min-height: 297mm;
+    padding: 0;
+  }}
+  
+  .header {{
+    background: #1a1a1a;
+    color: #fff;
+    padding: 40px 50px;
+    position: relative;
+  }}
+  
+  .header-gold {{
+    color: #B8860B;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }}
+  
+  .header h1 {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 36px;
+    font-weight: 300;
+    line-height: 1.2;
+    margin-bottom: 8px;
+  }}
+  
+  .header h2 {{
+    font-size: 13px;
+    font-weight: 300;
+    color: #aaa;
+    letter-spacing: 1px;
+  }}
+  
+  .honey-bar {{
+    height: 4px;
+    background: linear-gradient(90deg, #B8860B, #D4A843, #B8860B);
+  }}
+  
+  .content {{
+    padding: 40px 50px;
+  }}
+  
+  .intro {{
+    font-size: 14px;
+    line-height: 1.8;
+    color: #444;
+    margin-bottom: 30px;
+    border-left: 3px solid #B8860B;
+    padding-left: 16px;
+  }}
+  
+  .claim {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 22px;
+    font-style: italic;
+    color: #B8860B;
+    text-align: center;
+    margin: 30px 0;
+    padding: 20px;
+    border-top: 1px solid #e0d8c8;
+    border-bottom: 1px solid #e0d8c8;
+  }}
+  
+  .produkte-titel {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 20px;
+    font-weight: 400;
+    margin-bottom: 20px;
+    color: #1a1a1a;
+  }}
+  
+  .produkte-grid {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 30px;
+  }}
+  
+  .produkt {{
+    border: 1px solid #e0d8c8;
+    border-radius: 4px;
+    padding: 16px;
+    background: #faf8f4;
+  }}
+  
+  .produkt-name {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 18px;
+    font-weight: 400;
+    margin-bottom: 2px;
+  }}
+  
+  .produkt-typ {{
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #B8860B;
+    margin-bottom: 8px;
+  }}
+  
+  .produkt-desc {{
+    font-size: 12px;
+    color: #666;
+    line-height: 1.6;
+    margin-bottom: 10px;
+  }}
+  
+  .produkt-preis {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 16px;
+    color: #1a1a1a;
+    font-weight: 600;
+  }}
+  
+  .kein-likoer {{
+    background: #1a1a1a;
+    color: #B8860B;
+    padding: 12px 20px;
+    text-align: center;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 30px;
+    border-radius: 2px;
+  }}
+  
+  .cta {{
+    background: #faf8f4;
+    border: 1px solid #e0d8c8;
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 30px;
+    font-size: 14px;
+    color: #444;
+    line-height: 1.7;
+  }}
+  
+  .footer {{
+    border-top: 1px solid #e0d8c8;
+    padding: 20px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }}
+  
+  .footer-brand {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 18px;
+    color: #1a1a1a;
+  }}
+  
+  .footer-brand span {{
+    color: #B8860B;
+    font-style: italic;
+  }}
+  
+  .footer-kontakt {{
+    font-size: 11px;
+    color: #888;
+    text-align: right;
+    line-height: 1.8;
+  }}
+  
+  .handgemacht {{
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #B8860B;
+    margin-top: 4px;
+  }}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-gold">🍯 Honigspirituosen Josef Mayer · Wien</div>
+  <h1>{tmpl['titel']}</h1>
+  <h2>{tmpl['untertitel']}</h2>
+</div>
+
+<div class="honey-bar"></div>
+
+<div class="content">
+  
+  <div class="intro">
+    {tmpl['ansprache']},<br><br>
+    {tmpl['intro']}
+  </div>
+  
+  <div class="claim">„{lang['claim']}"</div>
+  
+  <div class="produkte-titel">{lang['produkte']}</div>
+  
+  <div class="produkte-grid">{produkte_html}</div>
+  
+  <div class="kein-likoer">{lang['kein_likoer']} · {lang['handgemacht']}</div>
+  
+  <div class="cta">{tmpl['cta']}</div>
+  
+  <div class="footer">
+    <div>
+      <div class="footer-brand">Honigspirituosen <span>Josef Mayer</span></div>
+      <div class="handgemacht">{lang['handgemacht']}</div>
+    </div>
+    <div class="footer-kontakt">
+      info@honigspirituosen.at<br>
+      www.honigspirituosen.at<br>
+      Wien, Österreich
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>"""
+    return html
+
+@app.route("/prospekt", methods=["POST"])
+def create_prospekt():
+    """Erstellt ein Prospekt als HTML (druckfertig)"""
+    data = request.json or {}
+    zielgruppe = data.get("zielgruppe", "Feinkost")
+    sprache = data.get("sprache", "de")
+    
+    html = generate_prospekt_html(zielgruppe, sprache)
+    
+    return jsonify({
+        "success": True,
+        "html": html,
+        "zielgruppe": zielgruppe,
+        "sprache": sprache
+    })
+
+@app.route("/prospekt/preview/<zielgruppe>", methods=["GET"])
+def prospekt_preview(zielgruppe):
+    """Zeigt Prospekt direkt im Browser an"""
+    sprache = request.args.get("lang", "de")
+    html = generate_prospekt_html(zielgruppe, sprache)
+    from flask import Response
+    return Response(html, mimetype='text/html')
+

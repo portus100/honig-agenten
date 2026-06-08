@@ -176,6 +176,7 @@
   <div class="tab" onclick="switchTab('meta')" id="tab-meta">📈 Meta</div>
   <div class="tab" onclick="switchTab('content')" id="tab-content">🎨 Content</div>
   <div class="tab" onclick="switchTab('foto')" id="tab-foto">📸 Foto Agent</div>
+  <div class="tab" onclick="switchTab('prospekt')" id="tab-prospekt">📄 Prospekt</div>
 </div>
 
 <div class="body">
@@ -302,6 +303,47 @@
       </div>
     </div>
 
+    <!-- PROSPEKT AGENT -->
+    <div class="panel" id="panel-prospekt">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Prospekt <em>Agent</em></div>
+          <div class="panel-sub">Druckfertige PDFs · Feinkost · Bar · Hotel · Markt</div>
+        </div>
+      </div>
+      <div class="controls">
+        <div class="controls-grid">
+          <div>
+            <div class="ctrl-label">Zielgruppe</div>
+            <select class="ctrl-select" id="prospektZielgruppe">
+              <option value="Feinkost">Feinkost & Delikatessen</option>
+              <option value="Bar">Bar & Cocktailbar</option>
+              <option value="Hotel">Hotel & Restaurant</option>
+              <option value="Markt">Markt (B2C)</option>
+            </select>
+          </div>
+          <div>
+            <div class="ctrl-label">Sprache</div>
+            <select class="ctrl-select" id="prospektSprache">
+              <option value="de">Deutsch</option>
+              <option value="en">English (bald)</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-dark" onclick="genProspekt()">📄 Prospekt erstellen</button>
+      </div>
+      <div id="prospektVorschau" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="ctrl-label">Vorschau</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-gold btn-sm" onclick="printProspekt()">🖨️ Drucken / Als PDF speichern</button>
+            <button class="btn btn-ghost btn-sm" onclick="openProspekt()">↗ Im neuen Tab öffnen</button>
+          </div>
+        </div>
+        <iframe id="prospektFrame" style="width:100%;height:700px;border:1px solid var(--border);border-radius:4px;background:#fff"></iframe>
+      </div>
+    </div>
+
     <!-- COMING SOON -->
     <div class="panel" id="panel-crm"><div class="empty" style="padding-top:80px"><div class="empty-icon">📊</div><h3>CRM Agent</h3><p>Lead-Pipeline · Nachfassen · Status<br><br>In Entwicklung</p></div></div>
     <div class="panel" id="panel-meta"><div class="empty" style="padding-top:80px"><div class="empty-icon">📈</div><h3>Meta Agent</h3><p>Werbung analysieren · Zielgruppen lernen<br><br>In Entwicklung</p></div></div>
@@ -325,7 +367,9 @@ function switchTab(tab) {
   document.getElementById(`tab-${tab}`).classList.add('active');
   if (tab === 'approvals') loadLeads('pending_approval', 'approvalsList');
   if (tab === 'foto') loadFotoArchiv();
+  if (tab === 'prospekt' && document.getElementById('prospektVorschau').style.display !== 'none') genProspekt();
   if (tab === 'foto') loadFotoArchiv();
+  if (tab === 'prospekt' && document.getElementById('prospektVorschau').style.display !== 'none') genProspekt();
 }
 
 // ── CHAT ──
@@ -576,6 +620,47 @@ async function reject(cid, i, leadId) {
     document.getElementById(`lead-${cid}-${i}`).classList.add('rejected');
     showToast('Abgelehnt', '');
   } catch {}
+}
+
+// ── PROSPEKT AGENT ──
+let currentProspektUrl = '';
+
+async function genProspekt() {
+  const zielgruppe = document.getElementById('prospektZielgruppe').value;
+  const sprache = document.getElementById('prospektSprache').value;
+  
+  showToast('Prospekt wird erstellt...', '');
+  
+  try {
+    const res = await fetch('/prospekt', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({zielgruppe, sprache})
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      const blob = new Blob([data.html], {type: 'text/html'});
+      const url = URL.createObjectURL(blob);
+      currentProspektUrl = url;
+      
+      document.getElementById('prospektFrame').src = url;
+      document.getElementById('prospektVorschau').style.display = 'block';
+      showToast('Prospekt erstellt!', 'ok');
+    }
+  } catch(e) {
+    showToast('Fehler: ' + e.message, 'err');
+  }
+}
+
+function printProspekt() {
+  const frame = document.getElementById('prospektFrame');
+  frame.contentWindow.print();
+}
+
+function openProspekt() {
+  const zielgruppe = document.getElementById('prospektZielgruppe').value;
+  window.open(`/prospekt/preview/${zielgruppe}`, '_blank');
 }
 
 // ── UTILS ──
