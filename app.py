@@ -1,4 +1,3 @@
-
 """
 Honigspirituosen Josef Mayer – Agent Backend
 Alle Agenten in einem Python Service auf Render
@@ -424,175 +423,20 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
+# ── FOTO ARCHIV API ──
+@app.route("/api/foto-archiv", methods=["GET"])
+def foto_archiv():
+    rows = sb_get("foto_empfehlungen", "select=*&order=datum.desc&limit=30")
+    return jsonify({"success": True, "empfehlungen": rows})
 
-# ════════════════════════════════════════
-# FOTO/CONTENT AGENT
-# Jeden Morgen Wetter + Shooting-Empfehlung via Telegram
-# ════════════════════════════════════════
+@app.route("/api/foto-erledigt", methods=["POST"])
+def foto_erledigt():
+    data = request.json or {}
+    sb_update("foto_empfehlungen", f"id=eq.{data.get('id')}", {"erledigt": data.get("erledigt", False)})
+    return jsonify({"success": True})
 
-def get_weather(city="Wien"):
-    """Holt Wetterdaten via Open-Meteo (kostenlos, kein API Key)"""
-    try:
-        # Koordinaten für Wien und NÖ
-        coords = {
-            "Wien": (48.2082, 16.3738),
-            "Niederösterreich": (48.1, 15.8)
-        }
-        lat, lon = coords.get(city, coords["Wien"])
-        
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weathercode,windspeed_10m&daily=weathercode,temperature_2m_max,precipitation_sum,sunrise,sunset&timezone=Europe/Vienna&forecast_days=1"
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        
-        current = data.get("current", {})
-        daily = data.get("daily", {})
-        
-        weather_codes = {
-            0: "Sonnig ☀️", 1: "Überwiegend sonnig 🌤️", 2: "Teilweise bewölkt ⛅",
-            3: "Bewölkt ☁️", 45: "Nebelig 🌫️", 48: "Reif-Nebel 🌫️",
-            51: "Leichter Nieselregen 🌦️", 53: "Nieselregen 🌦️", 55: "Starker Nieselregen 🌧️",
-            61: "Leichter Regen 🌧️", 63: "Regen 🌧️", 65: "Starker Regen 🌧️",
-            71: "Leichter Schnee ❄️", 73: "Schnee ❄️", 75: "Starker Schnee ❄️",
-            80: "Regenschauer 🌦️", 81: "Schauer 🌧️", 82: "Starke Schauer ⛈️",
-            95: "Gewitter ⛈️"
-        }
-        
-        code = current.get("weathercode", 0)
-        weather_desc = weather_codes.get(code, "Unbekannt")
-        temp = current.get("temperature_2m", 0)
-        wind = current.get("windspeed_10m", 0)
-        sunrise = daily.get("sunrise", [""])[0].split("T")[1] if daily.get("sunrise") else ""
-        sunset = daily.get("sunset", [""])[0].split("T")[1] if daily.get("sunset") else ""
-        precip = daily.get("precipitation_sum", [0])[0]
-        
-        return {
-            "description": weather_desc,
-            "temperature": temp,
-            "wind": wind,
-            "sunrise": sunrise,
-            "sunset": sunset,
-            "precipitation": precip,
-            "code": code,
-            "good_for_outdoor": code <= 3 and precip < 1.0
-        }
-    except Exception as e:
-        return {"description": "Wetter nicht verfügbar", "good_for_outdoor": True, "error": str(e)}
-
-def send_telegram(message):
-    """Sendet eine Nachricht via Telegram"""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
-            timeout=10
-        )
-        return r.ok
-    except:
-        return False
-
-def generate_photo_recommendation(weather_wien, weather_noe):
-    """Generiert Foto-Empfehlung basierend auf Wetter und Saison"""
-    
-    month = datetime.now().month
-    hour = datetime.now().hour
-    
-    # Saisonaler Content-Kalender
-    seasonal_content = {
-        1: ["Fassgold auf verschneitem Tisch", "Winterstimmung mit Kerzenlicht", "Jahreswechsel-Stimmung"],
-        2: ["Valentinstag – Geschenkidee Spirituosen", "Winterende – erste Sonnenstrahlen"],
-        3: ["Frühlingserwachen am Bienenstand", "Erste Blüten mit Wacholdergold"],
-        4: ["Bienen kehren zurück", "Frühlingsblüten – Blütenhonig-Saison beginnt"],
-        5: ["Rapsfeld mit Bienenstöcken", "Maiblüten – Blütenhonig Ernte"],
-        6: ["Sommerabend mit Wacholdergold Tonic", "Linden blühen – Lindenhonig-Saison"],
-        7: ["Sommer am Bienenstand", "Cocktail-Saison – Inselgold auf Eis"],
-        8: ["Sonnenblumen – Sonnenblumenhonig", "Hochsommer Ernte"],
-        9: ["Edelkastanie Saison beginnt", "Herbststimmung – Fassgold Edelkastanie"],
-        10: ["Herbstlaub mit Fassgold", "Ernte abgeschlossen – Zeit für Whisky"],
-        11: ["Adventstimmung", "Geschenksets für Weihnachten"],
-        12: ["Weihnachts-Stimmung", "Jahresabschluss – Fassgold am Kamin"]
-    }
-    
-    season_ideas = seasonal_content.get(month, ["Produktfoto am Bienenstand"])
-    
-    # Lichtempfehlung
-    if weather_wien["good_for_outdoor"]:
-        sunrise = weather_wien.get("sunrise", "06:00")
-        sunset = weather_wien.get("sunset", "20:00")
-        light_tip = f"🌅 Goldene Stunde morgens nach {sunrise} oder abends vor {sunset}"
-        outdoor_tip = "✅ Perfekt für Außenaufnahmen am Bienenstand!"
-    else:
-        outdoor_tip = "🏠 Schlechtwetter → Drinnen fotografieren"
-        light_tip = "💡 Fensterseite nutzen, weiches diffuses Licht ideal für Produktfotos"
-    
-    # Studio-Szene bei Schlechtwetter
-    indoor_scenes = [
-        "Flasche auf dunklem Holzbrett mit Honigwabe daneben",
-        "Flat-Lay: alle drei Produkte von oben, goldener Hintergrund",
-        "Flasche gegen Fenster – Gegenlicht zeigt die Farbe des Inhalts",
-        "Nahaufnahme Etikett mit unscharfem Hintergrund",
-        "Glas mit Inselgold und einer Zimtstange",
-        "Fassgold mit Whisky-Glas und Eichenwürfel"
-    ]
-    
-    import random
-    indoor_scene = random.choice(indoor_scenes)
-    season_idea = random.choice(season_ideas)
-    
-    return {
-        "outdoor_possible": weather_wien["good_for_outdoor"],
-        "outdoor_tip": outdoor_tip,
-        "light_tip": light_tip,
-        "season_idea": season_idea,
-        "indoor_scene": indoor_scene,
-        "weather_wien": weather_wien["description"],
-        "weather_noe": weather_noe["description"],
-        "temp": weather_wien.get("temperature", 0)
-    }
-
-@app.route("/foto-empfehlung", methods=["GET", "POST"])
-def foto_empfehlung():
-    """Generiert Foto-Empfehlung und sendet sie via Telegram"""
-    
-    weather_wien = get_weather("Wien")
-    weather_noe = get_weather("Niederösterreich")
-    rec = generate_photo_recommendation(weather_wien, weather_noe)
-    
-    today = datetime.now().strftime("%A, %d.%m.%Y")
-    
-    message = f"""🍯 <b>Honigspirituosen – Foto-Tipp für heute</b>
-{today}
-
-🌤️ <b>Wetter Wien:</b> {rec['weather_wien']} | {rec['temp']}°C
-🌿 <b>Wetter NÖ:</b> {rec['weather_noe']}
-
-{rec['outdoor_tip']}
-{rec['light_tip']}
-
-📸 <b>Saisonaler Content-Vorschlag:</b>
-{rec['season_idea']}
-
-🏠 <b>Alternative Drinnen-Szene:</b>
-{rec['indoor_scene']}
-
-<i>honigspirituosen.at</i>"""
-
-    telegram_sent = send_telegram(message)
-    
-    return jsonify({
-        "success": True,
-        "recommendation": rec,
-        "telegram_sent": telegram_sent,
-        "message": message
-    })
-
-@app.route("/telegram-test", methods=["GET"])
-def telegram_test():
-    """Testet die Telegram-Verbindung"""
-    sent = send_telegram("🍯 Test von Honigspirituosen Agenten – Telegram funktioniert!")
-    return jsonify({"success": sent, "message": "Telegram Test" if sent else "Telegram Fehler – Token oder Chat-ID prüfen"})
-
-
+@app.route("/api/foto-notiz", methods=["POST"])
+def foto_notiz():
+    data = request.json or {}
+    sb_update("foto_empfehlungen", f"id=eq.{data.get('id')}", {"notiz": data.get("notiz", "")})
+    return jsonify({"success": True})

@@ -141,6 +141,17 @@
     .toast.ok { background: var(--green); }
     .toast.err { background: var(--red); }
 
+    /* FOTO AGENT */
+    .foto-card { border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 12px; background: var(--paper); }
+    .foto-card.erledigt { opacity: .5; border-left: 3px solid var(--green); }
+    .foto-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+    .foto-datum { font-family: 'Cormorant Garamond', serif; font-size: 18px; font-weight: 300; }
+    .foto-wetter { font-size: 11px; color: var(--smoke); margin-top: 2px; }
+    .foto-idee { font-size: 13px; margin-bottom: 6px; font-weight: 500; }
+    .foto-szene { font-size: 12px; color: var(--amber); margin-bottom: 10px; }
+    .foto-notiz { width: 100%; background: var(--cream); border: 1px solid var(--border); border-radius: 3px; padding: 7px 9px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink); outline: none; resize: none; margin-bottom: 8px; }
+    .foto-notiz:focus { border-color: var(--gold); }
+
     @media(max-width:768px) {
       .chat-sidebar { display: none; }
       .controls-grid { grid-template-columns: 1fr; }
@@ -164,6 +175,7 @@
   <div class="tab" onclick="switchTab('crm')" id="tab-crm">📊 CRM</div>
   <div class="tab" onclick="switchTab('meta')" id="tab-meta">📈 Meta</div>
   <div class="tab" onclick="switchTab('content')" id="tab-content">🎨 Content</div>
+  <div class="tab" onclick="switchTab('foto')" id="tab-foto">📸 Foto Agent</div>
 </div>
 
 <div class="body">
@@ -219,27 +231,22 @@
               <option value="Wien 7. Bezirk">7. – Neubau</option>
               <option value="Wien 8. Bezirk">8. – Josefstadt</option>
               <option value="Wien 9. Bezirk">9. – Alsergrund</option>
-              <option value="Wien 10. Bezirk">10. – Favoriten</option>
-              <option value="Wien 11. Bezirk">11. – Simmering</option>
-              <option value="Wien 12. Bezirk">12. – Meidling</option>
               <option value="Wien 13. Bezirk">13. – Hietzing</option>
-              <option value="Wien 14. Bezirk">14. – Penzing</option>
-              <option value="Wien 15. Bezirk">15. – Rudolfsheim-Fünfhaus</option>
-              <option value="Wien 16. Bezirk">16. – Ottakring</option>
-              <option value="Wien 17. Bezirk">17. – Hernals</option>
               <option value="Wien 18. Bezirk">18. – Währing</option>
               <option value="Wien 19. Bezirk">19. – Döbling</option>
-              <option value="Wien 20. Bezirk">20. – Brigittenau</option>
-              <option value="Wien 21. Bezirk">21. – Floridsdorf</option>
-              <option value="Wien 22. Bezirk">22. – Donaustadt</option>
-              <option value="Wien 23. Bezirk">23. – Liesing</option>
             </select>
           </div>
         </div>
         <div style="margin-bottom:4px">
           <div class="ctrl-label" style="margin-bottom:8px">Verfügbare Tage für Termine</div>
-          <div id="calendarGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:320px;margin-bottom:6px"></div>
-          <div style="font-size:10px;color:var(--smoke);letter-spacing:.05em">Gewählt: <span id="selectedDatesText">keine</span></div>
+          <div class="days-row">
+            <button class="day-btn on" data-day="Montag" onclick="this.classList.toggle('on')">Mo</button>
+            <button class="day-btn on" data-day="Dienstag" onclick="this.classList.toggle('on')">Di</button>
+            <button class="day-btn on" data-day="Mittwoch" onclick="this.classList.toggle('on')">Mi</button>
+            <button class="day-btn on" data-day="Donnerstag" onclick="this.classList.toggle('on')">Do</button>
+            <button class="day-btn on" data-day="Freitag" onclick="this.classList.toggle('on')">Fr</button>
+            <button class="day-btn" data-day="Samstag" onclick="this.classList.toggle('on')">Sa</button>
+          </div>
         </div>
       </div>
 
@@ -268,6 +275,28 @@
       <div id="approvalsList"><div class="empty"><div class="empty-icon">✅</div><h3>Keine Freigaben</h3><p>Starte einen Scan um Leads zu finden.</p></div></div>
     </div>
 
+    <!-- FOTO AGENT -->
+    <div class="panel" id="panel-foto">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Foto <em>Agent</em></div>
+          <div class="panel-sub">Tägliche Wetter-Empfehlung · Shooting-Ideen · Archiv</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-dark btn-sm" onclick="getFotoEmpfehlung()">📸 Jetzt Empfehlung</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadFotoArchiv()">↻ Archiv laden</button>
+        </div>
+      </div>
+      <div id="fotoHeute" style="display:none;background:var(--cream);border:1px solid var(--border);border-radius:4px;padding:16px;margin-bottom:20px">
+        <div class="ctrl-label" style="margin-bottom:8px">Heutige Empfehlung</div>
+        <div id="fotoHeuteContent"></div>
+      </div>
+      <div class="ctrl-label" style="margin-bottom:12px">Archiv</div>
+      <div id="fotoArchiv">
+        <div class="empty"><div class="empty-icon">📸</div><h3>Noch keine Empfehlungen</h3><p>Drücke "Jetzt Empfehlung" oder warte auf die tägliche Nachricht.</p></div>
+      </div>
+    </div>
+
     <!-- COMING SOON -->
     <div class="panel" id="panel-crm"><div class="empty" style="padding-top:80px"><div class="empty-icon">📊</div><h3>CRM Agent</h3><p>Lead-Pipeline · Nachfassen · Status<br><br>In Entwicklung</p></div></div>
     <div class="panel" id="panel-meta"><div class="empty" style="padding-top:80px"><div class="empty-icon">📈</div><h3>Meta Agent</h3><p>Werbung analysieren · Zielgruppen lernen<br><br>In Entwicklung</p></div></div>
@@ -290,6 +319,7 @@ function switchTab(tab) {
   document.getElementById(`panel-${tab}`).classList.add('active');
   document.getElementById(`tab-${tab}`).classList.add('active');
   if (tab === 'approvals') loadLeads('pending_approval', 'approvalsList');
+  if (tab === 'foto') loadFotoArchiv();
 }
 
 // ── CHAT ──
@@ -366,52 +396,6 @@ function hideTyping(id) {
   if (el) el.remove();
 }
 
-// ── CALENDAR ──
-let selectedDates = [];
-
-function buildCalendar() {
-  const grid = document.getElementById('calendarGrid');
-  if (!grid) return;
-  const today = new Date();
-  grid.innerHTML = '';
-  ['Mo','Di','Mi','Do','Fr','Sa','So'].forEach(d => {
-    const h = document.createElement('div');
-    h.textContent = d;
-    h.style.cssText = 'font-size:10px;text-align:center;color:var(--smoke);padding:2px;';
-    grid.appendChild(h);
-  });
-  const startDate = new Date(today);
-  const dayOfWeek = (today.getDay() + 6) % 7;
-  startDate.setDate(today.getDate() - dayOfWeek);
-  for (let i = 0; i < 35; i++) {
-    const d = new Date(startDate);
-    d.setDate(startDate.getDate() + i);
-    const dateStr = d.toISOString().split('T')[0];
-    const btn = document.createElement('button');
-    btn.textContent = d.getDate();
-    btn.dataset.date = dateStr;
-    btn.style.cssText = 'padding:5px 2px;border:1px solid var(--border);border-radius:3px;background:var(--paper);font-family:JetBrains Mono,monospace;font-size:11px;cursor:pointer;transition:all .15s;color:var(--ink);';
-    if (d < today) { btn.style.opacity = '0.3'; btn.disabled = true; }
-    btn.onclick = function() {
-      if (this.disabled) return;
-      const idx = selectedDates.indexOf(dateStr);
-      if (idx >= 0) {
-        selectedDates.splice(idx, 1);
-        this.style.background = 'var(--paper)';
-        this.style.color = 'var(--ink)';
-        this.style.borderColor = 'var(--border)';
-      } else {
-        selectedDates.push(dateStr);
-        this.style.background = 'var(--ink)';
-        this.style.color = 'var(--paper)';
-        this.style.borderColor = 'var(--ink)';
-      }
-      document.getElementById('selectedDatesText').textContent = selectedDates.length === 0 ? 'keine' : selectedDates.sort().map(d => { const dt = new Date(d); return dt.toLocaleDateString('de-AT',{day:'2-digit',month:'2-digit'}); }).join(', ');
-    };
-    grid.appendChild(btn);
-  }
-}
-
 // ── SCAN ──
 async function startScan() {
   if (scanning) return;
@@ -419,8 +403,8 @@ async function startScan() {
   const btn = document.getElementById('scanBtn');
   btn.disabled = true; btn.textContent = '⏳ Läuft...';
 
-  const days = selectedDates;
-  if (!days.length) { showToast('Bitte Tage im Kalender auswählen', 'err'); scanning = false; btn.disabled = false; btn.textContent = '▶ Scan starten'; return; }
+  const days = Array.from(document.querySelectorAll('.day-btn.on')).map(b => b.dataset.day);
+  if (!days.length) { showToast('Bitte Tag auswählen', 'err'); scanning = false; btn.disabled = false; btn.textContent = '▶ Scan starten'; return; }
 
   setProgress(10, 'Google Maps wird durchsucht...'); showProg(true);
   logProgress('🔍 Suche gestartet...');
@@ -566,9 +550,76 @@ function showToast(msg, type) {
   setTimeout(() => t.classList.remove('on'), 3000);
 }
 
+// ── FOTO AGENT ──
+async function getFotoEmpfehlung() {
+  try {
+    showToast('Wetter wird abgerufen...', '');
+    const res = await fetch('/foto-empfehlung');
+    const data = await res.json();
+    if (data.success) {
+      const rec = data.recommendation;
+      const heute = document.getElementById('fotoHeute');
+      const cnt = document.getElementById('fotoHeuteContent');
+      heute.style.display = 'block';
+      cnt.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div><div class="ctrl-label">Wien</div><div style="font-size:13px">${rec.weather_wien} · ${rec.temp}°C</div></div>
+          <div><div class="ctrl-label">NÖ</div><div style="font-size:13px">${rec.weather_noe}</div></div>
+        </div>
+        <div style="margin-bottom:8px"><div class="ctrl-label">Licht & Outdoor</div><div style="font-size:12px">${rec.outdoor_tip}<br>${rec.light_tip}</div></div>
+        <div style="margin-bottom:8px"><div class="ctrl-label">Saisonaler Content</div><div style="font-size:13px;font-weight:500">${rec.season_idea}</div></div>
+        <div><div class="ctrl-label">Drinnen-Szene</div><div style="font-size:12px;color:var(--amber)">${rec.indoor_scene}</div></div>
+      `;
+      showToast(data.telegram_sent ? '📱 Auch an Telegram gesendet!' : 'Empfehlung geladen', 'ok');
+      loadFotoArchiv();
+    }
+  } catch(e) { showToast('Fehler: ' + e.message, 'err'); }
+}
+
+async function loadFotoArchiv() {
+  try {
+    const res = await fetch('/api/foto-archiv');
+    const data = await res.json();
+    const el = document.getElementById('fotoArchiv');
+    if (!data.success || !data.empfehlungen || !data.empfehlungen.length) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">📸</div><h3>Noch keine Empfehlungen</h3><p>Drücke "Jetzt Empfehlung" um zu starten.</p></div>';
+      return;
+    }
+    el.innerHTML = data.empfehlungen.map(e => `
+      <div class="foto-card ${e.erledigt ? 'erledigt' : ''}" id="foto-${e.id}">
+        <div class="foto-card-header">
+          <div>
+            <div class="foto-datum">${new Date(e.datum).toLocaleDateString('de-AT',{weekday:'long',day:'2-digit',month:'long'})}</div>
+            <div class="foto-wetter">${e.wetter_wien||''} · ${e.wetter_noe||''}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${e.outdoor_moeglich ? '<span style="color:var(--green);font-size:11px">✅ Outdoor</span>' : '<span style="color:var(--smoke);font-size:11px">🏠 Drinnen</span>'}
+            <button class="btn btn-ghost btn-sm" onclick="toggleErledigt('${e.id}',${e.erledigt})">${e.erledigt ? '↺ Offen' : '✓ Erledigt'}</button>
+          </div>
+        </div>
+        <div class="foto-idee">📸 ${e.saison_idee||''}</div>
+        <div class="foto-szene">🏠 ${e.indoor_szene||''}</div>
+        <textarea class="foto-notiz" rows="2" placeholder="Notiz hinzufügen..." onblur="saveNotiz('${e.id}',this.value)">${e.notiz||''}</textarea>
+      </div>
+    `).join('');
+  } catch {}
+}
+
+async function toggleErledigt(id, currentState) {
+  try {
+    await fetch('/api/foto-erledigt', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id, erledigt: !currentState}) });
+    loadFotoArchiv();
+  } catch {}
+}
+
+async function saveNotiz(id, notiz) {
+  try {
+    await fetch('/api/foto-notiz', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id, notiz}) });
+  } catch {}
+}
+
 // INIT
 document.addEventListener('DOMContentLoaded', () => {
-  buildCalendar();
   loadLeads('pending_approval', 'approvalsList');
   // Load chat history
   fetch('/api/chat-history').then(r=>r.json()).then(data => {
