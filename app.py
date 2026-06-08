@@ -418,7 +418,7 @@ def health():
  
 @app.route("/", methods=["GET"])
 def index():
-    return send_file("index.html")
+    return send_file("index.html", mimetype="text/html")
  
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
