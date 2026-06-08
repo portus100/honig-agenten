@@ -231,22 +231,27 @@
               <option value="Wien 7. Bezirk">7. – Neubau</option>
               <option value="Wien 8. Bezirk">8. – Josefstadt</option>
               <option value="Wien 9. Bezirk">9. – Alsergrund</option>
+              <option value="Wien 10. Bezirk">10. – Favoriten</option>
+              <option value="Wien 11. Bezirk">11. – Simmering</option>
+              <option value="Wien 12. Bezirk">12. – Meidling</option>
               <option value="Wien 13. Bezirk">13. – Hietzing</option>
+              <option value="Wien 14. Bezirk">14. – Penzing</option>
+              <option value="Wien 15. Bezirk">15. – Rudolfsheim-Fünfhaus</option>
+              <option value="Wien 16. Bezirk">16. – Ottakring</option>
+              <option value="Wien 17. Bezirk">17. – Hernals</option>
               <option value="Wien 18. Bezirk">18. – Währing</option>
               <option value="Wien 19. Bezirk">19. – Döbling</option>
+              <option value="Wien 20. Bezirk">20. – Brigittenau</option>
+              <option value="Wien 21. Bezirk">21. – Floridsdorf</option>
+              <option value="Wien 22. Bezirk">22. – Donaustadt</option>
+              <option value="Wien 23. Bezirk">23. – Liesing</option>
             </select>
           </div>
         </div>
         <div style="margin-bottom:4px">
           <div class="ctrl-label" style="margin-bottom:8px">Verfügbare Tage für Termine</div>
-          <div class="days-row">
-            <button class="day-btn on" data-day="Montag" onclick="this.classList.toggle('on')">Mo</button>
-            <button class="day-btn on" data-day="Dienstag" onclick="this.classList.toggle('on')">Di</button>
-            <button class="day-btn on" data-day="Mittwoch" onclick="this.classList.toggle('on')">Mi</button>
-            <button class="day-btn on" data-day="Donnerstag" onclick="this.classList.toggle('on')">Do</button>
-            <button class="day-btn on" data-day="Freitag" onclick="this.classList.toggle('on')">Fr</button>
-            <button class="day-btn" data-day="Samstag" onclick="this.classList.toggle('on')">Sa</button>
-          </div>
+          <div id="calendarGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:320px;margin-bottom:6px"></div>
+          <div style="font-size:10px;color:var(--smoke);letter-spacing:.05em">Gewählt: <span id="selectedDatesText">keine</span></div>
         </div>
       </div>
 
@@ -319,6 +324,7 @@ function switchTab(tab) {
   document.getElementById(`panel-${tab}`).classList.add('active');
   document.getElementById(`tab-${tab}`).classList.add('active');
   if (tab === 'approvals') loadLeads('pending_approval', 'approvalsList');
+  if (tab === 'foto') loadFotoArchiv();
   if (tab === 'foto') loadFotoArchiv();
 }
 
@@ -396,6 +402,52 @@ function hideTyping(id) {
   if (el) el.remove();
 }
 
+// ── CALENDAR ──
+let selectedDates = [];
+
+function buildCalendar() {
+  const grid = document.getElementById('calendarGrid');
+  if (!grid) return;
+  const today = new Date();
+  grid.innerHTML = '';
+  ['Mo','Di','Mi','Do','Fr','Sa','So'].forEach(d => {
+    const h = document.createElement('div');
+    h.textContent = d;
+    h.style.cssText = 'font-size:10px;text-align:center;color:var(--smoke);padding:2px;';
+    grid.appendChild(h);
+  });
+  const startDate = new Date(today);
+  const dayOfWeek = (today.getDay() + 6) % 7;
+  startDate.setDate(today.getDate() - dayOfWeek);
+  for (let i = 0; i < 35; i++) {
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
+    const dateStr = d.toISOString().split('T')[0];
+    const btn = document.createElement('button');
+    btn.textContent = d.getDate();
+    btn.dataset.date = dateStr;
+    btn.style.cssText = 'padding:5px 2px;border:1px solid var(--border);border-radius:3px;background:var(--paper);font-family:JetBrains Mono,monospace;font-size:11px;cursor:pointer;transition:all .15s;color:var(--ink);';
+    if (d < today) { btn.style.opacity = '0.3'; btn.disabled = true; }
+    btn.onclick = function() {
+      if (this.disabled) return;
+      const idx = selectedDates.indexOf(dateStr);
+      if (idx >= 0) {
+        selectedDates.splice(idx, 1);
+        this.style.background = 'var(--paper)';
+        this.style.color = 'var(--ink)';
+        this.style.borderColor = 'var(--border)';
+      } else {
+        selectedDates.push(dateStr);
+        this.style.background = 'var(--ink)';
+        this.style.color = 'var(--paper)';
+        this.style.borderColor = 'var(--ink)';
+      }
+      document.getElementById('selectedDatesText').textContent = selectedDates.length === 0 ? 'keine' : selectedDates.sort().map(d => { const dt = new Date(d); return dt.toLocaleDateString('de-AT',{day:'2-digit',month:'2-digit'}); }).join(', ');
+    };
+    grid.appendChild(btn);
+  }
+}
+
 // ── SCAN ──
 async function startScan() {
   if (scanning) return;
@@ -403,8 +455,8 @@ async function startScan() {
   const btn = document.getElementById('scanBtn');
   btn.disabled = true; btn.textContent = '⏳ Läuft...';
 
-  const days = Array.from(document.querySelectorAll('.day-btn.on')).map(b => b.dataset.day);
-  if (!days.length) { showToast('Bitte Tag auswählen', 'err'); scanning = false; btn.disabled = false; btn.textContent = '▶ Scan starten'; return; }
+  const days = selectedDates;
+  if (!days.length) { showToast('Bitte Tage im Kalender auswählen', 'err'); scanning = false; btn.disabled = false; btn.textContent = '▶ Scan starten'; return; }
 
   setProgress(10, 'Google Maps wird durchsucht...'); showProg(true);
   logProgress('🔍 Suche gestartet...');
@@ -620,6 +672,7 @@ async function saveNotiz(id, notiz) {
 
 // INIT
 document.addEventListener('DOMContentLoaded', () => {
+  buildCalendar();
   loadLeads('pending_approval', 'approvalsList');
   // Load chat history
   fetch('/api/chat-history').then(r=>r.json()).then(data => {
