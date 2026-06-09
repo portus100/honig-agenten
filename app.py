@@ -23,6 +23,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL", "")
 SUPABASE_URL     = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY     = os.environ.get("SUPABASE_ANON_KEY", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # ── SUPABASE HELPERS ──
 def sb_get(table, params=""):
@@ -419,9 +421,312 @@ def health():
 def index():
     return send_file("index.html")
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+# ════════════════════════════════════════
+# TELEGRAM HELPER
+# ════════════════════════════════════════
+def send_telegram(text):
+    """Sendet eine Nachricht an Josefs Telegram. Gibt True/False zurück."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=10
+        )
+        return r.ok
+    except:
+        return False
+
+# ════════════════════════════════════════
+# FOTO AGENT – Wetter & Empfehlung
+# ════════════════════════════════════════
+
+# Wien & St. Pölten (NÖ) Koordinaten
+WETTER_ORTE = {
+    "wien": {"lat": 48.2082, "lon": 16.3738},
+    "noe":  {"lat": 48.2047, "lon": 15.6256}  # St. Pölten
+}
+
+WETTERCODE = {
+    0: "klar", 1: "überwiegend klar", 2: "teils bewölkt", 3: "bewölkt",
+    45: "Nebel", 48: "Reifnebel", 51: "leichter Niesel", 53: "Niesel",
+    55: "starker Niesel", 61: "leichter Regen", 63: "Regen", 65: "starker Regen",
+    71: "leichter Schnee", 73: "Schnee", 75: "starker Schnee", 77: "Schneegriesel",
+    80: "Regenschauer", 81: "Regenschauer", 82: "heftige Schauer",
+    85: "Schneeschauer", 86: "Schneeschauer", 95: "Gewitter", 96: "Gewitter mit Hagel"
+}
+
+def get_wetter(lat, lon):
+    """Holt aktuelles Wetter von Open-Meteo (kostenlos, kein API Key)."""
+    try:
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat, "longitude": lon,
+                "current": "temperature_2m,weather_code,cloud_cover",
+                "timezone": "Europe/Vienna"
+            },
+            timeout=10
+        )
+        data = r.json().get("current", {})
+        code = data.get("weather_code", 0)
+        return {
+            "temp": round(data.get("temperature_2m", 0)),
+            "code": code,
+            "beschreibung": WETTERCODE.get(code, "wechselhaft"),
+            "cloud_cover": data.get("cloud_cover", 0)
+        }
+    except Exception as e:
+        return {"temp": 0, "code": 0, "beschreibung": "unbekannt", "cloud_cover": 0, "error": str(e)}
+
+def aktuelle_saison():
+    """Gibt die aktuelle Jahreszeit + saisonalen Honig-Kontext zurück."""
+    monat = datetime.now().month
+    if monat in (3, 4, 5):
+        return {
+            "name": "Frühling",
+            "honig": "Frühlingsblüte, Löwenzahn, Obstblüte",
+            "stimmung": "frisches Licht, Blüten, Neubeginn",
+            "produkt_fokus": "Wacholdergold (Gin) – passt zur frischen, klaren Jahreszeit"
+        }
+    elif monat in (6, 7, 8):
+        return {
+            "name": "Sommer",
+            "honig": "Linde, Sonnenblume, Waldhonig",
+            "stimmung": "warmes Abendlicht, goldene Stunde, Terrasse",
+            "produkt_fokus": "Inselgold (Rum) – sommerlich, entspannt, für laue Abende"
+        }
+    elif monat in (9, 10, 11):
+        return {
+            "name": "Herbst",
+            "honig": "Edelkastanie, Heidehonig, Wald",
+            "stimmung": "warme Töne, gemütlich, bernsteinfarbenes Licht",
+            "produkt_fokus": "Fassgold (Whisky) – warm, tief, perfekt für kühlere Tage"
+        }
+    else:
+        return {
+            "name": "Winter",
+            "honig": "dunkler Waldhonig, kräftige Sorten",
+            "stimmung": "Kerzenlicht, Kaminstimmung, Innenaufnahmen",
+            "produkt_fokus": "Fassgold (Whisky) – Wärme im Glas, Festtagsstimmung"
+        }
+
+def generate_foto_empfehlung():
+    """Erzeugt eine Foto-Empfehlung basierend auf Wetter + Saison via Claude."""
+    wetter_wien = get_wetter(WETTER_ORTE["wien"]["lat"], WETTER_ORTE["wien"]["lon"])
+    wetter_noe  = get_wetter(WETTER_ORTE["noe"]["lat"], WETTER_ORTE["noe"]["lon"])
+    saison = aktuelle_saison()
+
+    # Outdoor möglich? Kein Regen/Schnee/Gewitter und nicht zu bewölkt
+    schlechtwetter_codes = {51,53,55,61,63,65,71,73,75,77,80,81,82,85,86,95,96}
+    outdoor_moeglich = wetter_wien["code"] not in schlechtwetter_codes
+
+    system_prompt = """Du bist der Foto-Berater von Honigspirituosen Josef Mayer in Wien.
+Josef ist Berufsimker und stellt Premium-Spirituosen her: Wacholdergold (Gin), Fassgold (Whisky), Inselgold (Rum) – alle mit eigenem Honig veredelt.
+Claim: "Du erwartest Süße – du bekommst Charakter."
+Du gibst kurze, konkrete, umsetzbare Foto-Empfehlungen für Social Media. Kein Geschwafel, direkt und praktisch."""
+
+    user_msg = f"""Wetter heute in Wien: {wetter_wien['beschreibung']}, {wetter_wien['temp']}°C, Bewölkung {wetter_wien['cloud_cover']}%.
+Jahreszeit: {saison['name']}. Saisonale Honige: {saison['honig']}. Stimmung: {saison['stimmung']}. Produkt-Fokus: {saison['produkt_fokus']}.
+Outdoor-Fotos heute {"sinnvoll" if outdoor_moeglich else "eher nicht (Wetter)"}.
+
+Gib mir eine Foto-Empfehlung für heute. Antworte NUR mit JSON, kein anderer Text:
+{{"outdoor_tip": "ein konkreter Tipp für Outdoor-Fotos heute (1 Satz)", "light_tip": "Tipp zum Licht heute (1 Satz)", "season_idea": "eine konkrete saisonale Foto-Idee mit einem der Produkte (1-2 Sätze)", "indoor_scene": "eine Indoor-Szene als Alternative (1 Satz)"}}"""
+
+    antwort = call_claude(system_prompt, user_msg)
+    
+    # JSON aus Antwort extrahieren
+    try:
+        json_match = re.search(r'\{.*\}', antwort, re.DOTALL)
+        ideen = json.loads(json_match.group()) if json_match else {}
+    except:
+        ideen = {}
+
+    recommendation = {
+        "weather_wien": wetter_wien["beschreibung"],
+        "temp": wetter_wien["temp"],
+        "weather_noe": f"{wetter_noe['beschreibung']}, {wetter_noe['temp']}°C",
+        "outdoor_tip": ideen.get("outdoor_tip", "Heute flexibel bleiben."),
+        "light_tip": ideen.get("light_tip", "Weiches Tageslicht am Fenster nutzen."),
+        "season_idea": ideen.get("season_idea", f"{saison['produkt_fokus']}"),
+        "indoor_scene": ideen.get("indoor_scene", "Produkt auf Holztisch mit Tageslicht."),
+        "outdoor_moeglich": outdoor_moeglich
+    }
+    return recommendation, saison
+
+@app.route("/foto-empfehlung", methods=["GET"])
+def foto_empfehlung():
+    """Generiert die heutige Foto-Empfehlung, speichert sie und schickt Telegram."""
+    recommendation, saison = generate_foto_empfehlung()
+
+    # In Supabase speichern
+    sb_insert("foto_empfehlungen", {
+        "datum": datetime.now().isoformat(),
+        "wetter_wien": f"{recommendation['weather_wien']}, {recommendation['temp']}°C",
+        "wetter_noe": recommendation["weather_noe"],
+        "saison_idee": recommendation["season_idea"],
+        "indoor_szene": recommendation["indoor_scene"],
+        "outdoor_moeglich": recommendation["outdoor_moeglich"],
+        "erledigt": False,
+        "notiz": ""
+    })
+
+    # Telegram Push
+    telegram_text = (
+        f"📸 <b>Foto-Empfehlung heute</b>\n\n"
+        f"🌤 Wien: {recommendation['weather_wien']}, {recommendation['temp']}°C\n\n"
+        f"💡 <b>Idee:</b> {recommendation['season_idea']}\n\n"
+        f"☀️ Licht: {recommendation['light_tip']}\n"
+        f"🏠 Indoor: {recommendation['indoor_scene']}"
+    )
+    telegram_sent = send_telegram(telegram_text)
+
+    return jsonify({
+        "success": True,
+        "recommendation": recommendation,
+        "telegram_sent": telegram_sent
+    })
+
+@app.route("/telegram-test", methods=["GET"])
+def telegram_test():
+    """Testet ob Telegram funktioniert."""
+    ok = send_telegram("✅ Test von Honigspirituosen Agent – Telegram funktioniert!")
+    return jsonify({"success": ok, "configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)})
+
+# ════════════════════════════════════════
+# CONTENT CREATOR AGENT
+# Foto/Bild → Captions für IG Feed, IG Story, Facebook, LinkedIn
+# ════════════════════════════════════════
+
+# Claude kann Bilder analysieren – diese Funktion nimmt base64 Bild
+def call_claude_vision(system_prompt, user_text, image_base64, media_type="image/jpeg"):
+    """Claude mit Bild-Input. image_base64 ohne data:... Prefix."""
+    if not ANTHROPIC_API_KEY:
+        return "ANTHROPIC_API_KEY fehlt"
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01"
+            },
+            json={
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 1024,
+                "system": system_prompt,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_base64}},
+                        {"type": "text", "text": user_text}
+                    ]
+                }]
+            },
+            timeout=30
+        )
+        data = r.json()
+        if not r.ok:
+            return f"Claude Vision Fehler: {data}"
+        return data.get("content", [{}])[0].get("text", "")
+    except Exception as e:
+        return f"Claude Vision Fehler: {str(e)}"
+
+CONTENT_SYSTEM = """Du bist der Social-Media-Texter von Honigspirituosen Josef Mayer aus Wien.
+Josef ist Berufsimker und stellt Premium-Spirituosen her – alle mit eigenem Honig veredelt:
+- Wacholdergold (Gin, €39,90) – frisch, klar, feine Honigrunde
+- Fassgold (Whisky, €44,00) – warm, tief, komplex, in 4 Honigsorten
+- Inselgold (Rum, €34,90) – warm, weich, der Honig macht ihn runder, nicht süßer
+Claim: "Du erwartest Süße – du bekommst Charakter."
+Kein Likör. Echtes Handwerk aus Wien.
+
+TON: authentisch, hochwertig, nahbar. Josef spricht persönlich als Imker. Keine Werbefloskeln, kein übertriebenes Marketing-Deutsch. Charakter statt Kitsch.
+
+Du schreibst Captions für 4 Plattformen mit unterschiedlichem Stil:
+- Instagram Feed: emotional, bildstark, 2-4 Sätze, Story-Charakter
+- Instagram Story: sehr kurz, knackig, 1 Satz + Call-to-Action
+- Facebook: etwas ausführlicher, erzählend, darf persönlicher sein
+- LinkedIn: professionell, Fokus auf Handwerk/Qualität/Unternehmertum, B2B-tauglich"""
+
+@app.route("/content/generate", methods=["POST"])
+def content_generate():
+    """Erzeugt Captions für alle 4 Plattformen aus Bild + optionalem Anlass."""
+    data = request.json or {}
+    image_base64 = data.get("image_base64", "")
+    media_type = data.get("media_type", "image/jpeg")
+    anlass = (data.get("anlass") or "").strip()
+    image_source = data.get("image_source", "upload")  # upload oder dalle
+
+    anlass_text = f"\n\nBesonderer Anlass / Kontext für diesen Post: {anlass}" if anlass else ""
+
+    user_text = f"""Schau dir das Bild an und schreibe Captions für alle 4 Plattformen.{anlass_text}
+
+Antworte NUR mit JSON, kein anderer Text, genau in diesem Format:
+{{
+  "bild_beschreibung": "kurz was auf dem Bild zu sehen ist (1 Satz)",
+  "instagram_feed": {{"caption": "...", "hashtags": "#... #... #..."}},
+  "instagram_story": {{"caption": "...", "hashtags": "#... #..."}},
+  "facebook": {{"caption": "...", "hashtags": "#... #..."}},
+  "linkedin": {{"caption": "...", "hashtags": "#... #..."}}
+}}
+
+Hashtags: 5-10 relevante pro Plattform (Mix aus Marke, Region Wien, Produktkategorie). LinkedIn weniger Hashtags (3-5), professioneller."""
+
+    if not image_base64:
+        return jsonify({"success": False, "error": "Kein Bild übergeben"})
+
+    antwort = call_claude_vision(CONTENT_SYSTEM, user_text, image_base64, media_type)
+
+    # JSON extrahieren
+    try:
+        json_match = re.search(r'\{.*\}', antwort, re.DOTALL)
+        content = json.loads(json_match.group()) if json_match else None
+    except:
+        content = None
+
+    if not content:
+        return jsonify({"success": False, "error": "Konnte Captions nicht erzeugen", "raw": antwort[:500]})
+
+    return jsonify({"success": True, "content": content, "image_source": image_source})
+
+@app.route("/content/dalle", methods=["POST"])
+def content_dalle():
+    """Generiert ein Werbebild via DALL-E 3. Auf Knopfdruck (kostet ~$0,04-0,08)."""
+    if not OPENAI_API_KEY:
+        return jsonify({"success": False, "error": "OPENAI_API_KEY fehlt"})
+
+    data = request.json or {}
+    motiv = (data.get("motiv") or "").strip()
+    if not motiv:
+        return jsonify({"success": False, "error": "Kein Motiv angegeben"})
+
+    saison = aktuelle_saison()
+    prompt = f"""Professional advertising photograph for a premium Austrian honey-infused spirits brand.
+{motiv}.
+Style: high-end product photography, warm amber and golden tones, natural light, artisanal and authentic mood, Viennese craftsmanship aesthetic. Season: {saison['name']}. No text, no logos, no labels with readable words. Elegant, not kitschy. Editorial quality."""
+
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "dall-e-3",
+                "prompt": prompt,
+                "n": 1,
+                "size": "1024x1024",
+                "quality": "standard",
+                "response_format": "b64_json"
+            },
+            timeout=60
+        )
+        data_r = r.json()
+        if not r.ok:
+            return jsonify({"success": False, "error": f"DALL-E Fehler: {data_r}"})
+        b64 = data_r["data"][0]["b64_json"]
+        return jsonify({"success": True, "image_base64": b64, "media_type": "image/png"})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"DALL-E Fehler: {str(e)}"})
 
 # ── FOTO ARCHIV API ──
 @app.route("/api/foto-archiv", methods=["GET"])
@@ -797,3 +1102,7 @@ def prospekt_preview(zielgruppe):
     from flask import Response
     return Response(html, mimetype='text/html')
 
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

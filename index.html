@@ -347,7 +347,51 @@
     <!-- COMING SOON -->
     <div class="panel" id="panel-crm"><div class="empty" style="padding-top:80px"><div class="empty-icon">📊</div><h3>CRM Agent</h3><p>Lead-Pipeline · Nachfassen · Status<br><br>In Entwicklung</p></div></div>
     <div class="panel" id="panel-meta"><div class="empty" style="padding-top:80px"><div class="empty-icon">📈</div><h3>Meta Agent</h3><p>Werbung analysieren · Zielgruppen lernen<br><br>In Entwicklung</p></div></div>
-    <div class="panel" id="panel-content"><div class="empty" style="padding-top:80px"><div class="empty-icon">🎨</div><h3>Content Agent</h3><p>Posts · Texte · Reels-Ideen<br><br>In Entwicklung</p></div></div>
+
+    <!-- CONTENT CREATOR -->
+    <div class="panel" id="panel-content">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Content <em>Creator</em></div>
+          <div class="panel-sub">Foto rein · Captions für IG Feed, Story, Facebook & LinkedIn</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="ctrl-label" style="margin-bottom:8px">1 · Bild wählen</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <button class="btn btn-dark btn-sm" onclick="document.getElementById('contentFileInput').click()">📁 Foto hochladen</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleDalleBox()">🎨 Bild generieren (DALL-E)</button>
+          <input type="file" id="contentFileInput" accept="image/*" style="display:none" onchange="handleContentUpload(event)">
+        </div>
+
+        <div id="dalleBox" style="display:none;margin-bottom:12px">
+          <div class="ctrl-label" style="margin-bottom:4px">Motiv beschreiben</div>
+          <input type="text" class="ctrl-select" id="dalleMotiv" placeholder="z.B. Eine Flasche Gin auf einem Holztisch neben einer Honigwabe" style="margin-bottom:8px">
+          <button class="btn btn-gold btn-sm" onclick="generateDalle()" id="dalleBtn">🎨 Generieren (~$0,05)</button>
+          <div style="font-size:10px;color:var(--smoke);margin-top:6px;letter-spacing:.05em">DALL-E 3 · kostet pro Bild · wird erst auf Knopfdruck erzeugt</div>
+        </div>
+
+        <div id="contentPreview" style="display:none;margin-bottom:12px">
+          <div class="ctrl-label" style="margin-bottom:6px">Gewähltes Bild</div>
+          <img id="contentPreviewImg" style="max-width:240px;max-height:240px;border:1px solid var(--border);border-radius:4px;display:block">
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div class="ctrl-label" style="margin-bottom:4px">2 · Anlass / Kontext (optional)</div>
+          <input type="text" class="ctrl-select" id="contentAnlass" placeholder="z.B. Neue Whisky-Charge, Wochenmarkt am Samstag, Vatertag...">
+        </div>
+
+        <button class="btn btn-dark" onclick="generateContent()" id="contentBtn" disabled>✍️ Captions erstellen</button>
+      </div>
+
+      <div class="progress" id="contentProg">
+        <div class="progress-label" id="contentProgLabel">Captions werden erstellt...</div>
+        <div class="progress-track"><div class="progress-fill" id="contentProgFill"></div></div>
+      </div>
+
+      <div id="contentResult"><div class="empty"><div class="empty-icon">🎨</div><h3>Noch kein Content</h3><p>Lade ein Foto hoch oder generiere ein Bild,<br>dann erstelle Captions für alle Plattformen.</p></div></div>
+    </div>
 
   </div>
 </div>
@@ -753,6 +797,163 @@ async function saveNotiz(id, notiz) {
   try {
     await fetch('/api/foto-notiz', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id, notiz}) });
   } catch {}
+}
+
+// ── CONTENT CREATOR ──
+let contentImageBase64 = '';
+let contentMediaType = 'image/jpeg';
+let contentImageSource = 'upload';
+
+function toggleDalleBox() {
+  const box = document.getElementById('dalleBox');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+function handleContentUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  // Max ~5MB Check
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('Bild zu groß (max 5MB)', 'err');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const dataUrl = e.target.result;
+    contentImageBase64 = dataUrl.split(',')[1];
+    contentMediaType = file.type || 'image/jpeg';
+    contentImageSource = 'upload';
+    showContentPreview(dataUrl);
+  };
+  reader.readAsDataURL(file);
+}
+
+function showContentPreview(dataUrl) {
+  document.getElementById('contentPreviewImg').src = dataUrl;
+  document.getElementById('contentPreview').style.display = 'block';
+  document.getElementById('contentBtn').disabled = false;
+}
+
+async function generateDalle() {
+  const motiv = document.getElementById('dalleMotiv').value.trim();
+  if (!motiv) { showToast('Bitte Motiv beschreiben', 'err'); return; }
+  const btn = document.getElementById('dalleBtn');
+  btn.disabled = true;
+  btn.textContent = '🎨 Generiere...';
+  try {
+    const res = await fetch('/content/dalle', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({motiv})
+    });
+    const data = await res.json();
+    if (data.success) {
+      contentImageBase64 = data.image_base64;
+      contentMediaType = data.media_type || 'image/png';
+      contentImageSource = 'dalle';
+      showContentPreview('data:' + contentMediaType + ';base64,' + data.image_base64);
+      showToast('Bild generiert!', 'ok');
+    } else {
+      showToast('Fehler: ' + (data.error || 'unbekannt'), 'err');
+    }
+  } catch(e) {
+    showToast('Fehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🎨 Generieren (~$0,05)';
+  }
+}
+
+async function generateContent() {
+  if (!contentImageBase64) { showToast('Erst ein Bild wählen', 'err'); return; }
+  const anlass = document.getElementById('contentAnlass').value.trim();
+  const btn = document.getElementById('contentBtn');
+  btn.disabled = true;
+  document.getElementById('contentProg').classList.add('on');
+  document.getElementById('contentProgFill').style.width = '40%';
+  document.getElementById('contentProgLabel').textContent = 'Bild wird analysiert...';
+
+  try {
+    const res = await fetch('/content/generate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        image_base64: contentImageBase64,
+        media_type: contentMediaType,
+        anlass: anlass,
+        image_source: contentImageSource
+      })
+    });
+    document.getElementById('contentProgFill').style.width = '90%';
+    const data = await res.json();
+    document.getElementById('contentProg').classList.remove('on');
+    document.getElementById('contentProgFill').style.width = '0%';
+
+    if (data.success) {
+      renderContent(data.content);
+      showToast('Captions erstellt!', 'ok');
+    } else {
+      showToast('Fehler: ' + (data.error || 'unbekannt'), 'err');
+    }
+  } catch(e) {
+    document.getElementById('contentProg').classList.remove('on');
+    showToast('Fehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderContent(content) {
+  const plattformen = [
+    {key: 'instagram_feed', label: '📷 Instagram Feed'},
+    {key: 'instagram_story', label: '📲 Instagram Story'},
+    {key: 'facebook', label: '👍 Facebook'},
+    {key: 'linkedin', label: '💼 LinkedIn'}
+  ];
+  const imgSrc = 'data:' + contentMediaType + ';base64,' + contentImageBase64;
+
+  let html = '';
+  if (content.bild_beschreibung) {
+    html += `<div style="font-size:11px;color:var(--smoke);margin-bottom:16px;letter-spacing:.04em">🖼 ${content.bild_beschreibung}</div>`;
+  }
+
+  html += plattformen.map(p => {
+    const block = content[p.key] || {};
+    const caption = block.caption || '';
+    const hashtags = block.hashtags || '';
+    const fullText = caption + (hashtags ? '\n\n' + hashtags : '');
+    const safeText = fullText.replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    return `
+      <div class="foto-card">
+        <div class="foto-card-header">
+          <div class="foto-datum" style="font-size:16px">${p.label}</div>
+          <button class="btn btn-ghost btn-sm" onclick="copyContent(this, '${safeText}')">📋 Kopieren</button>
+        </div>
+        <div style="font-size:13px;line-height:1.7;white-space:pre-wrap;margin-bottom:10px">${caption}</div>
+        <div style="font-size:12px;color:var(--amber);line-height:1.6">${hashtags}</div>
+      </div>`;
+  }).join('');
+
+  // Bild zum Download/Speichern anzeigen
+  html += `
+    <div class="foto-card">
+      <div class="foto-card-header">
+        <div class="foto-datum" style="font-size:16px">🖼 Bild</div>
+        <a class="btn btn-ghost btn-sm" href="${imgSrc}" download="honig-content.${contentMediaType==='image/png'?'png':'jpg'}" style="text-decoration:none">⬇ Speichern</a>
+      </div>
+      <img src="${imgSrc}" style="max-width:280px;border:1px solid var(--border);border-radius:4px;display:block">
+    </div>`;
+
+  document.getElementById('contentResult').innerHTML = html;
+}
+
+function copyContent(btn, text) {
+  const decoded = text.replace(/\\n/g, '\n').replace(/\\'/g, "'");
+  navigator.clipboard.writeText(decoded).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ Kopiert';
+    setTimeout(() => btn.textContent = orig, 1500);
+  }).catch(() => showToast('Kopieren fehlgeschlagen', 'err'));
 }
 
 // INIT
