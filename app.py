@@ -467,18 +467,35 @@ def get_wetter(lat, lon):
                 "current": "temperature_2m,weather_code,cloud_cover",
                 "timezone": "Europe/Vienna"
             },
+            headers={"User-Agent": "HonigAgent/1.0"},
             timeout=10
         )
+        if not r.ok:
+            print(f"[WETTER] Open-Meteo HTTP {r.status_code}: {r.text[:200]}")
+            return {"temp": None, "code": -1, "beschreibung": "Wetter nicht verfügbar", "cloud_cover": None, "ok": False}
+
         data = r.json().get("current", {})
-        code = data.get("weather_code", 0)
+        print(f"[WETTER] Open-Meteo current: {data}")
+
+        temp_raw = data.get("temperature_2m")
+        code = data.get("weather_code")
+        cloud = data.get("cloud_cover")
+
+        # None-sichere Verarbeitung
+        temp = round(temp_raw) if temp_raw is not None else None
+        if code is None:
+            code = -1
+
         return {
-            "temp": round(data.get("temperature_2m", 0)),
+            "temp": temp,
             "code": code,
-            "beschreibung": WETTERCODE.get(code, "wechselhaft"),
-            "cloud_cover": data.get("cloud_cover", 0)
+            "beschreibung": WETTERCODE.get(code, "wechselhaft" if code >= 0 else "Wetter nicht verfügbar"),
+            "cloud_cover": cloud,
+            "ok": temp is not None
         }
     except Exception as e:
-        return {"temp": 0, "code": 0, "beschreibung": "unbekannt", "cloud_cover": 0, "error": str(e)}
+        print(f"[WETTER] Exception: {e}")
+        return {"temp": None, "code": -1, "beschreibung": "Wetter nicht verfügbar", "cloud_cover": None, "ok": False, "error": str(e)}
 
 def aktuelle_saison():
     """Gibt die aktuelle Jahreszeit + saisonalen Honig-Kontext zurück."""
@@ -518,18 +535,35 @@ def generate_foto_empfehlung():
     wetter_noe  = get_wetter(WETTER_ORTE["noe"]["lat"], WETTER_ORTE["noe"]["lon"])
     saison = aktuelle_saison()
 
-    # Outdoor möglich? Kein Regen/Schnee/Gewitter und nicht zu bewölkt
+    wetter_ok = wetter_wien.get("ok", False)
+
+    # Outdoor möglich? Nur bewerten wenn Wetterdaten da sind
     schlechtwetter_codes = {51,53,55,61,63,65,71,73,75,77,80,81,82,85,86,95,96}
-    outdoor_moeglich = wetter_wien["code"] not in schlechtwetter_codes
+    if wetter_ok:
+        outdoor_moeglich = wetter_wien["code"] not in schlechtwetter_codes
+    else:
+        outdoor_moeglich = None  # unbekannt
+
+    # Anzeige-Strings (None-sicher)
+    temp_str = f"{wetter_wien['temp']}°C" if wetter_wien.get("temp") is not None else "k.A."
+    cloud_str = f", Bewölkung {wetter_wien['cloud_cover']}%" if wetter_wien.get("cloud_cover") is not None else ""
+    noe_temp_str = f", {wetter_noe['temp']}°C" if wetter_noe.get("temp") is not None else ""
+
+    if wetter_ok:
+        wetter_zeile = f"Wetter heute in Wien: {wetter_wien['beschreibung']}, {temp_str}{cloud_str}."
+        outdoor_zeile = f"Outdoor-Fotos heute {'sinnvoll' if outdoor_moeglich else 'eher nicht (Wetter)'}."
+    else:
+        wetter_zeile = "Wetterdaten heute nicht verfügbar – gib eine wetterunabhängige Empfehlung."
+        outdoor_zeile = "Outdoor-Eignung unbekannt – gib sowohl eine Outdoor- als auch eine Indoor-Idee."
 
     system_prompt = """Du bist der Foto-Berater von Honigspirituosen Josef Mayer in Wien.
 Josef ist Berufsimker und stellt Premium-Spirituosen her: Wacholdergold (Gin), Fassgold (Whisky), Inselgold (Rum) – alle mit eigenem Honig veredelt.
 Claim: "Du erwartest Süße – du bekommst Charakter."
 Du gibst kurze, konkrete, umsetzbare Foto-Empfehlungen für Social Media. Kein Geschwafel, direkt und praktisch."""
 
-    user_msg = f"""Wetter heute in Wien: {wetter_wien['beschreibung']}, {wetter_wien['temp']}°C, Bewölkung {wetter_wien['cloud_cover']}%.
+    user_msg = f"""{wetter_zeile}
 Jahreszeit: {saison['name']}. Saisonale Honige: {saison['honig']}. Stimmung: {saison['stimmung']}. Produkt-Fokus: {saison['produkt_fokus']}.
-Outdoor-Fotos heute {"sinnvoll" if outdoor_moeglich else "eher nicht (Wetter)"}.
+{outdoor_zeile}
 
 Gib mir eine Foto-Empfehlung für heute. Antworte NUR mit JSON, kein anderer Text:
 {{"outdoor_tip": "ein konkreter Tipp für Outdoor-Fotos heute (1 Satz)", "light_tip": "Tipp zum Licht heute (1 Satz)", "season_idea": "eine konkrete saisonale Foto-Idee mit einem der Produkte (1-2 Sätze)", "indoor_scene": "eine Indoor-Szene als Alternative (1 Satz)"}}"""
@@ -543,27 +577,44 @@ Gib mir eine Foto-Empfehlung für heute. Antworte NUR mit JSON, kein anderer Tex
     except:
         ideen = {}
 
+    # Anzeige-Werte für Frontend
+    weather_wien_display = wetter_wien["beschreibung"] if wetter_ok else "nicht verfügbar"
+    weather_noe_display = (f"{wetter_noe['beschreibung']}{noe_temp_str}" if wetter_noe.get("ok") else "nicht verfügbar")
+
     recommendation = {
-        "weather_wien": wetter_wien["beschreibung"],
-        "temp": wetter_wien["temp"],
-        "weather_noe": f"{wetter_noe['beschreibung']}, {wetter_noe['temp']}°C",
+        "weather_wien": weather_wien_display,
+        "temp": wetter_wien["temp"] if wetter_wien.get("temp") is not None else "–",
+        "weather_noe": weather_noe_display,
         "outdoor_tip": ideen.get("outdoor_tip", "Heute flexibel bleiben."),
         "light_tip": ideen.get("light_tip", "Weiches Tageslicht am Fenster nutzen."),
         "season_idea": ideen.get("season_idea", f"{saison['produkt_fokus']}"),
         "indoor_scene": ideen.get("indoor_scene", "Produkt auf Holztisch mit Tageslicht."),
-        "outdoor_moeglich": outdoor_moeglich
+        "outdoor_moeglich": bool(outdoor_moeglich) if outdoor_moeglich is not None else False,
+        "wetter_ok": wetter_ok
     }
     return recommendation, saison
+
+@app.route("/wetter-test", methods=["GET"])
+def wetter_test():
+    """Diagnose: zeigt rohe Wetterdaten von Open-Meteo."""
+    w = get_wetter(WETTER_ORTE["wien"]["lat"], WETTER_ORTE["wien"]["lon"])
+    return jsonify({"wien": w})
 
 @app.route("/foto-empfehlung", methods=["GET"])
 def foto_empfehlung():
     """Generiert die heutige Foto-Empfehlung, speichert sie und schickt Telegram."""
     recommendation, saison = generate_foto_empfehlung()
 
+    # Wetter-Anzeige-String (None-sicher)
+    if recommendation.get("wetter_ok"):
+        wetter_wien_str = f"{recommendation['weather_wien']}, {recommendation['temp']}°C"
+    else:
+        wetter_wien_str = "Wetter nicht verfügbar"
+
     # In Supabase speichern
     sb_insert("foto_empfehlungen", {
         "datum": datetime.now().isoformat(),
-        "wetter_wien": f"{recommendation['weather_wien']}, {recommendation['temp']}°C",
+        "wetter_wien": wetter_wien_str,
         "wetter_noe": recommendation["weather_noe"],
         "saison_idee": recommendation["season_idea"],
         "indoor_szene": recommendation["indoor_scene"],
@@ -575,7 +626,7 @@ def foto_empfehlung():
     # Telegram Push
     telegram_text = (
         f"📸 <b>Foto-Empfehlung heute</b>\n\n"
-        f"🌤 Wien: {recommendation['weather_wien']}, {recommendation['temp']}°C\n\n"
+        f"🌤 Wien: {wetter_wien_str}\n\n"
         f"💡 <b>Idee:</b> {recommendation['season_idea']}\n\n"
         f"☀️ Licht: {recommendation['light_tip']}\n"
         f"🏠 Indoor: {recommendation['indoor_scene']}"

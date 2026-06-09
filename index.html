@@ -744,7 +744,7 @@ async function getFotoEmpfehlung() {
       heute.style.display = 'block';
       cnt.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-          <div><div class="ctrl-label">Wien</div><div style="font-size:13px">${rec.weather_wien} · ${rec.temp}°C</div></div>
+          <div><div class="ctrl-label">Wien</div><div style="font-size:13px">${rec.wetter_ok ? rec.weather_wien + ' · ' + rec.temp + '°C' : '⚠️ ' + rec.weather_wien}</div></div>
           <div><div class="ctrl-label">NÖ</div><div style="font-size:13px">${rec.weather_noe}</div></div>
         </div>
         <div style="margin-bottom:8px"><div class="ctrl-label">Licht & Outdoor</div><div style="font-size:12px">${rec.outdoor_tip}<br>${rec.light_tip}</div></div>
