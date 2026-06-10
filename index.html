@@ -175,6 +175,7 @@
   <div class="tab" onclick="switchTab('crm')" id="tab-crm">📊 CRM</div>
   <div class="tab" onclick="switchTab('meta')" id="tab-meta">📈 Meta</div>
   <div class="tab" onclick="switchTab('content')" id="tab-content">🎨 Content</div>
+  <div class="tab" onclick="switchTab('brand')" id="tab-brand">✨ Marke</div>
   <div class="tab" onclick="switchTab('foto')" id="tab-foto">📸 Foto Agent</div>
   <div class="tab" onclick="switchTab('prospekt')" id="tab-prospekt">📄 Prospekt</div>
 </div>
@@ -393,6 +394,49 @@
       <div id="contentResult"><div class="empty"><div class="empty-icon">🎨</div><h3>Noch kein Content</h3><p>Lade ein Foto hoch oder generiere ein Bild,<br>dann erstelle Captions für alle Plattformen.</p></div></div>
     </div>
 
+    <!-- BRAND MEMORY -->
+    <div class="panel" id="panel-brand">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Marken<em>regeln</em></div>
+          <div class="panel-sub">Zentrale Regeln · gelten für alle Textagenten (Content, Wien Scanner)</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="resetBrand()">↺ Startwerte</button>
+      </div>
+
+      <div style="font-size:12px;color:var(--smoke);margin-bottom:16px;line-height:1.6;letter-spacing:.03em">
+        Diese Regeln werden jedem Textagenten vor dem Schreiben mitgegeben. Änderungen wirken sofort auf alle künftigen Texte. Die Compliance-Regeln schützen vor unzulässiger Spirituosenwerbung – bitte mit Bedacht ändern.
+      </div>
+
+      <div class="controls">
+        <div style="margin-bottom:14px">
+          <div class="ctrl-label" style="margin-bottom:4px">📍 Positionierung</div>
+          <textarea class="ctrl-select" id="brand_positioning" rows="3" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="ctrl-label" style="margin-bottom:4px">💬 Bevorzugte Sprache &amp; Ton</div>
+          <textarea class="ctrl-select" id="brand_preferred_language" rows="3" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="ctrl-label" style="margin-bottom:4px">🚫 Verbotene Begriffe &amp; Aussagen</div>
+          <textarea class="ctrl-select" id="brand_forbidden_phrases" rows="3" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="ctrl-label" style="margin-bottom:4px">⚖️ Rechtliche Regeln (Compliance)</div>
+          <textarea class="ctrl-select" id="brand_compliance_rules" rows="4" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="ctrl-label" style="margin-bottom:4px">✓ Belegbarkeit</div>
+          <textarea class="ctrl-select" id="brand_proof_requirements" rows="2" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div style="margin-bottom:16px">
+          <div class="ctrl-label" style="margin-bottom:4px">📡 Kanal-Tonalität</div>
+          <textarea class="ctrl-select" id="brand_channel_preferences" rows="4" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <button class="btn btn-dark" onclick="saveBrand()" id="brandSaveBtn">💾 Markenregeln speichern</button>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -412,8 +456,7 @@ function switchTab(tab) {
   if (tab === 'approvals') loadLeads('pending_approval', 'approvalsList');
   if (tab === 'foto') loadFotoArchiv();
   if (tab === 'prospekt' && document.getElementById('prospektVorschau').style.display !== 'none') genProspekt();
-  if (tab === 'foto') loadFotoArchiv();
-  if (tab === 'prospekt' && document.getElementById('prospektVorschau').style.display !== 'none') genProspekt();
+  if (tab === 'brand') loadBrand();
 }
 
 // ── CHAT ──
@@ -954,6 +997,70 @@ function copyContent(btn, text) {
     btn.textContent = '✓ Kopiert';
     setTimeout(() => btn.textContent = orig, 1500);
   }).catch(() => showToast('Kopieren fehlgeschlagen', 'err'));
+}
+
+// ── BRAND MEMORY ──
+const BRAND_FIELDS = ['positioning','preferred_language','forbidden_phrases','compliance_rules','proof_requirements','channel_preferences'];
+
+async function loadBrand() {
+  try {
+    const res = await fetch('/brand');
+    const data = await res.json();
+    if (data.success && data.rules) {
+      BRAND_FIELDS.forEach(f => {
+        const el = document.getElementById('brand_' + f);
+        if (el) el.value = data.rules[f] || '';
+      });
+    }
+  } catch(e) {
+    showToast('Markenregeln konnten nicht geladen werden', 'err');
+  }
+}
+
+async function saveBrand() {
+  const btn = document.getElementById('brandSaveBtn');
+  btn.disabled = true;
+  btn.textContent = '💾 Speichere...';
+  const payload = {};
+  BRAND_FIELDS.forEach(f => {
+    const el = document.getElementById('brand_' + f);
+    if (el) payload[f] = el.value.trim();
+  });
+  try {
+    const res = await fetch('/brand', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Markenregeln gespeichert – gelten ab sofort für alle Agenten', 'ok');
+    } else {
+      showToast('Speichern fehlgeschlagen', 'err');
+    }
+  } catch(e) {
+    showToast('Fehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Markenregeln speichern';
+  }
+}
+
+async function resetBrand() {
+  if (!confirm('Markenregeln auf die Startwerte zurücksetzen? Deine Änderungen gehen verloren.')) return;
+  try {
+    const res = await fetch('/brand/reset', {method: 'POST'});
+    const data = await res.json();
+    if (data.success && data.rules) {
+      BRAND_FIELDS.forEach(f => {
+        const el = document.getElementById('brand_' + f);
+        if (el) el.value = data.rules[f] || '';
+      });
+      showToast('Auf Startwerte zurückgesetzt', 'ok');
+    }
+  } catch(e) {
+    showToast('Fehler: ' + e.message, 'err');
+  }
 }
 
 // INIT

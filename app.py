@@ -22,7 +22,8 @@ OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL", "")
 SUPABASE_URL     = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY     = os.environ.get("SUPABASE_ANON_KEY", "")
+# service_role umgeht RLS (liegt geheim in Render). Fallback auf anon, falls nicht gesetzt.
+SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY", "") or os.environ.get("SUPABASE_ANON_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -124,6 +125,121 @@ def call_gpt4(prompt):
         return data["choices"][0]["message"]["content"]
     except Exception as e:
         return f"GPT Fehler: {str(e)}"
+
+
+# ════════════════════════════════════════
+# BRAND MEMORY – zentrale Markenregeln für alle Textagenten
+# ════════════════════════════════════════
+
+# Startwerte – Melli ergänzt/ändert das später im Dashboard
+BRAND_DEFAULTS = {
+    "positioning": (
+        "Premium-Honigspirituosen aus Wien, handwerklich vom Berufsimker Josef Mayer. "
+        "Drei Produkte: Wacholdergold (Gin), Fassgold (Whisky), Inselgold (Rum) – alle mit eigenem Honig veredelt. "
+        "Honig ist VEREDELUNG, kein Süßungsversprechen. KEIN Likör. "
+        "Positionierung: hochwertig aber nahbar, echtes Handwerk statt Marketing-Glanz. "
+        "Claim: 'Du erwartest Süße – du bekommst Charakter.'"
+    ),
+    "preferred_language": (
+        "Bevorzugte Begriffe: Charakter, Handwerk, Veredelung, Berufsimker, eigener Honig, "
+        "Vom Stock ins Glas, komplex, fein, Wiener Handwerk, Blütenhonig, Charakter statt Kompromiss. "
+        "Ton: authentisch, persönlich (Josef spricht als Imker in der Ich-Form), hochwertig aber nicht abgehoben. "
+        "Keine Werbefloskeln, kein übertriebenes Marketing-Deutsch."
+    ),
+    "forbidden_phrases": (
+        "VERBOTEN (Recht/EU): bekömmlich, gesund, tut gut, wohltuend, heilsam, therapeutisch, "
+        "entspannt, gegen Stress, stärkend, belebend – keine gesundheitsbezogenen oder Wirkungs-Aussagen. "
+        "VERBOTEN (Spirituosenkodex): Aufforderung zum Trinken, übermäßiger Konsum, Alkohol als Problemlöser, "
+        "Alkohol + Autofahren/Maschinen, Erfolg/Leistung durch Alkohol, Ansprache von unter 18-Jährigen. "
+        "VERBOTEN (Marke): Likör, süß als Verkaufsargument, billig, Schnaps (abwertend)."
+    ),
+    "compliance_rules": (
+        "Österreich Spirituosenwerbung (Werberat + Spirituosenkodex), gilt auch online/Social Media: "
+        "1) Keine gesundheitsbezogenen Angaben (EU-Recht ab 1,2% Alkohol). "
+        "2) Keine therapeutische/stimulierende/konfliktlösende Wirkung suggerieren. "
+        "3) Nicht zu übermäßigem Konsum ermutigen. "
+        "4) Nicht an Kinder/Jugendliche richten – Zielgruppe immer ab 18 (Ads besser ab 25). "
+        "5) Kein Alkohol-Kontext mit Fahrzeuglenken/Maschinen. "
+        "6) Alkohol nicht als Erfolgs-/Leistungssteigerung darstellen. "
+        "7) Keine verharmlosenden Darstellungen."
+    ),
+    "proof_requirements": (
+        "Belegbar bleiben: 'eigener Honig' und 'Berufsimker' sind echt – darauf darf man sich stützen. "
+        "Keine erfundenen Auszeichnungen, keine erfundenen Bewertungen, keine erfundenen Mengen/Zahlen. "
+        "Preise nur nennen wenn aktuell bekannt. Alkoholgehalt nur wenn korrekt."
+    ),
+    "channel_preferences": (
+        "Instagram Feed: emotional, bildstark, 2-4 Sätze, Story-Charakter. "
+        "Instagram Story: sehr kurz, 1 Satz + Call-to-Action. "
+        "Facebook: erzählend, persönlich, etwas ausführlicher. "
+        "LinkedIn: professionell, Fokus Handwerk/Qualität/Unternehmertum, B2B-tauglich, weniger Hashtags. "
+        "B2B-E-Mail (Wien Scanner): sachlich, respektvoll, kurz, konkretes Terminangebot. "
+        "Prospekt: hochwertig, informativ, Imker-Geschichte im Zentrum."
+    )
+}
+
+BRAND_FIELDS = ["positioning", "preferred_language", "forbidden_phrases",
+                "compliance_rules", "proof_requirements", "channel_preferences"]
+
+def lade_brand_rules():
+    """Lädt die Markenregeln aus Supabase. Fällt auf Defaults zurück wenn leer."""
+    rows = sb_get("brand_rules", "select=*&id=eq.1")
+    if rows and isinstance(rows, list) and len(rows) > 0:
+        row = rows[0]
+        # Fehlende Felder mit Defaults auffüllen
+        return {f: (row.get(f) or BRAND_DEFAULTS[f]) for f in BRAND_FIELDS}
+    return dict(BRAND_DEFAULTS)
+
+def brand_kontext(kanal=None):
+    """Baut einen Text-Block mit den Markenregeln für den System-Prompt eines Agenten.
+    Optional kann ein Kanal hervorgehoben werden (z.B. 'Instagram Feed')."""
+    r = lade_brand_rules()
+    block = (
+        "\n\n═══ MARKENREGELN (verbindlich für alle Texte) ═══\n"
+        f"POSITIONIERUNG: {r['positioning']}\n\n"
+        f"BEVORZUGTE SPRACHE: {r['preferred_language']}\n\n"
+        f"VERBOTENE BEGRIFFE/AUSSAGEN: {r['forbidden_phrases']}\n\n"
+        f"RECHTLICHE REGELN (UNBEDINGT EINHALTEN): {r['compliance_rules']}\n\n"
+        f"BELEGBARKEIT: {r['proof_requirements']}\n\n"
+        f"KANAL-TONALITÄT: {r['channel_preferences']}\n"
+        "════════════════════════════════════════\n"
+    )
+    return block
+
+@app.route("/brand", methods=["GET"])
+def brand_get():
+    """Gibt die aktuellen Markenregeln zurück (für den Brand-Tab)."""
+    return jsonify({"success": True, "rules": lade_brand_rules()})
+
+@app.route("/brand", methods=["POST"])
+def brand_save():
+    """Speichert die Markenregeln. Upsert auf Zeile id=1."""
+    data = request.json or {}
+    payload = {"id": 1}
+    for f in BRAND_FIELDS:
+        if f in data:
+            payload[f] = data[f]
+
+    # Existiert Zeile 1 schon?
+    existing = sb_get("brand_rules", "select=id&id=eq.1")
+    if existing and len(existing) > 0:
+        ok = sb_update("brand_rules", "id=eq.1", payload)
+    else:
+        ok = sb_insert("brand_rules", payload)
+
+    return jsonify({"success": bool(ok), "rules": lade_brand_rules()})
+
+@app.route("/brand/reset", methods=["POST"])
+def brand_reset():
+    """Setzt die Markenregeln auf die Startwerte zurück."""
+    payload = {"id": 1}
+    payload.update(BRAND_DEFAULTS)
+    existing = sb_get("brand_rules", "select=id&id=eq.1")
+    if existing and len(existing) > 0:
+        ok = sb_update("brand_rules", "id=eq.1", payload)
+    else:
+        ok = sb_insert("brand_rules", payload)
+    return jsonify({"success": bool(ok), "rules": lade_brand_rules()})
 
 
 def get_scanned_place_ids():
@@ -246,7 +362,7 @@ Anforderungen:
 Format:
 BETREFF: [Betreff]
 ---
-[E-Mail Text]"""
+[E-Mail Text]""" + brand_kontext()
     
     return call_gpt4(prompt)
 
@@ -727,7 +843,8 @@ Hashtags: 5-10 relevante pro Plattform (Mix aus Marke, Region Wien, Produktkateg
     if not image_base64:
         return jsonify({"success": False, "error": "Kein Bild übergeben"})
 
-    antwort = call_claude_vision(CONTENT_SYSTEM, user_text, image_base64, media_type)
+    system_mit_brand = CONTENT_SYSTEM + brand_kontext()
+    antwort = call_claude_vision(system_mit_brand, user_text, image_base64, media_type)
 
     # JSON extrahieren
     try:
