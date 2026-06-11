@@ -573,8 +573,31 @@ WETTERCODE = {
     85: "Schneeschauer", 86: "Schneeschauer", 95: "Gewitter", 96: "Gewitter mit Hagel"
 }
 
+# Tages-Cache: { "lat,lon": {"datum": "2026-06-11", "daten": {...}} }
+# Spart Open-Meteo-Aufrufe – einmal pro Tag pro Ort reicht für einen Imker.
+_WETTER_CACHE = {}
+
 def get_wetter(lat, lon):
-    """Holt aktuelles Wetter von Open-Meteo (kostenlos, kein API Key)."""
+    """Holt Wetter von Open-Meteo, mit Tages-Cache. Fragt pro Ort nur 1x täglich neu."""
+    cache_key = f"{lat},{lon}"
+    heute = datetime.now().strftime("%Y-%m-%d")
+
+    # Cache-Treffer? Dann gar nicht erst Open-Meteo fragen.
+    cached = _WETTER_CACHE.get(cache_key)
+    if cached and cached.get("datum") == heute and cached.get("daten", {}).get("ok"):
+        print(f"[WETTER] Cache-Treffer für {cache_key} ({heute})")
+        return cached["daten"]
+
+    daten = _wetter_von_api(lat, lon)
+
+    # Nur erfolgreiche Abrufe cachen (Fehler nicht, damit später nochmal versucht wird)
+    if daten.get("ok"):
+        _WETTER_CACHE[cache_key] = {"datum": heute, "daten": daten}
+
+    return daten
+
+def _wetter_von_api(lat, lon):
+    """Roher Open-Meteo-Abruf. KEIN Retry bei 429 (würde nur die Quota verbrennen)."""
     try:
         r = requests.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -583,25 +606,25 @@ def get_wetter(lat, lon):
                 "current": "temperature_2m,weather_code,cloud_cover",
                 "timezone": "Europe/Vienna"
             },
-            headers={"User-Agent": "HonigAgent/1.0"},
-            timeout=10
+            headers={"User-Agent": "Mozilla/5.0 (HonigAgent)"},
+            timeout=25
         )
         if not r.ok:
-            print(f"[WETTER] Open-Meteo HTTP {r.status_code}: {r.text[:200]}")
-            return {"temp": None, "code": -1, "beschreibung": "Wetter nicht verfügbar", "cloud_cover": None, "ok": False}
+            grund = r.text[:150]
+            print(f"[WETTER] HTTP {r.status_code}: {grund}")
+            # Bei 429 (Limit) ehrlichen Hinweis mitgeben
+            hinweis = "Tageslimit erreicht" if r.status_code == 429 else f"HTTP {r.status_code}"
+            return {"temp": None, "code": -1, "beschreibung": "Wetter nicht verfügbar",
+                    "cloud_cover": None, "ok": False, "fehler": hinweis}
 
         data = r.json().get("current", {})
-        print(f"[WETTER] Open-Meteo current: {data}")
-
+        print(f"[WETTER] OK: {data}")
         temp_raw = data.get("temperature_2m")
         code = data.get("weather_code")
         cloud = data.get("cloud_cover")
-
-        # None-sichere Verarbeitung
         temp = round(temp_raw) if temp_raw is not None else None
         if code is None:
             code = -1
-
         return {
             "temp": temp,
             "code": code,
@@ -610,8 +633,10 @@ def get_wetter(lat, lon):
             "ok": temp is not None
         }
     except Exception as e:
-        print(f"[WETTER] Exception: {e}")
-        return {"temp": None, "code": -1, "beschreibung": "Wetter nicht verfügbar", "cloud_cover": None, "ok": False, "error": str(e)}
+        fehler = f"{type(e).__name__}: {str(e)[:120]}"
+        print(f"[WETTER] Exception: {fehler}")
+        return {"temp": None, "code": -1, "beschreibung": "Wetter nicht verfügbar",
+                "cloud_cover": None, "ok": False, "fehler": fehler}
 
 def aktuelle_saison():
     """Gibt die aktuelle Jahreszeit + saisonalen Honig-Kontext zurück."""
@@ -712,9 +737,23 @@ Gib mir eine Foto-Empfehlung für heute. Antworte NUR mit JSON, kein anderer Tex
 
 @app.route("/wetter-test", methods=["GET"])
 def wetter_test():
-    """Diagnose: zeigt rohe Wetterdaten von Open-Meteo."""
+    """Diagnose: zeigt rohe Wetterdaten + nackten Direkt-Test von Open-Meteo."""
     w = get_wetter(WETTER_ORTE["wien"]["lat"], WETTER_ORTE["wien"]["lon"])
-    return jsonify({"wien": w})
+
+    # Nackter Direkt-Test ohne Verarbeitung – zeigt was Open-Meteo wirklich antwortet
+    roh = {}
+    try:
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast?latitude=48.2082&longitude=16.3738&current=temperature_2m",
+            headers={"User-Agent": "Mozilla/5.0 (HonigAgent)"},
+            timeout=25
+        )
+        roh["status_code"] = r.status_code
+        roh["antwort"] = r.text[:300]
+    except Exception as e:
+        roh["exception"] = f"{type(e).__name__}: {str(e)[:200]}"
+
+    return jsonify({"verarbeitet": w, "roh_direkt": roh})
 
 @app.route("/foto-empfehlung", methods=["GET"])
 def foto_empfehlung():
