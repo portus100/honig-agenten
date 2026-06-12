@@ -105,6 +105,44 @@ def call_claude(system_prompt, user_message, history=None):
     except Exception as e:
         return f"Claude Fehler: {str(e)}"
 
+def call_claude_websearch(system_prompt, user_message, max_searches=5):
+    """Claude mit aktivierter Web-Suche. Für Recherche-Aufgaben (Märkte etc).
+    Kostet ~1 Cent pro Suche zusätzlich. Gibt den finalen Text zurück."""
+    if not ANTHROPIC_API_KEY:
+        return "ANTHROPIC_API_KEY fehlt"
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01"
+            },
+            json={
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 4000,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+                "tools": [{
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": max_searches
+                }]
+            },
+            timeout=120  # Web-Suche dauert deutlich länger
+        )
+        data = r.json()
+        if not r.ok:
+            return f"Claude Websearch Fehler: {data}"
+        # Antwort kann mehrere Text-Blöcke enthalten (zwischen Suchen) – alle zusammenfügen
+        texte = []
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                texte.append(block.get("text", ""))
+        return "\n".join(texte)
+    except Exception as e:
+        return f"Claude Websearch Fehler: {str(e)}"
+
 # ── GPT-4o (E-Mail schreiben) ──
 def call_gpt4(prompt):
     if not OPENAI_API_KEY:
@@ -1308,6 +1346,125 @@ def prospekt_preview(zielgruppe):
     html = generate_prospekt_html(zielgruppe, sprache)
     from flask import Response
     return Response(html, mimetype='text/html')
+
+
+# ════════════════════════════════════════
+# MARKT-/MESSE-SCANNER
+# Sucht Märkte & Messen in Wien + NÖ wo Josef ausstellen kann
+# ════════════════════════════════════════
+
+MARKT_SYSTEM = """Du bist der Markt-Scout von Honigspirituosen Josef Mayer aus Wien.
+Josef ist Berufsimker und stellt Premium-Spirituosen her (Gin, Whisky, Rum mit eigenem Honig).
+Er sucht Märkte, Messen und Veranstaltungen in WIEN und NIEDERÖSTERREICH, wo er seine Produkte
+als Aussteller anbieten/verkaufen kann.
+
+RELEVANTE ARTEN:
+- Genussmärkte, Spezialitätenmärkte, Feinkostmärkte
+- Genuss-/Vital-/Kulinarik-Messen
+- Flanier-, Stadtteil- und Straßenmärkte (mit Genuss-Anteil)
+- Kunsthandwerksmärkte / Designmärkte
+- Advent-/Weihnachtsmärkte
+- Bauernmärkte / Regionalmärkte
+- Hochzeitsmessen (Spirituosen als Geschenk/Gastgeschenk)
+
+NICHT relevant: reine Flohmärkte ohne Genuss, reine Automessen, reine Fachmessen ohne Endkunden.
+
+Suche im Web nach solchen Veranstaltungen, die in der ZUKUNFT stattfinden (ab heute).
+Für jeden gefundenen Markt sammle: Name, Ort, Datum, Bewerbungsfrist für Aussteller (falls auffindbar), Website-Link, Kategorie."""
+
+@app.route("/maerkte/suchen", methods=["POST"])
+def maerkte_suchen():
+    """Sucht per Claude Web-Search nach Märkten. Auf Knopfdruck (kostet ~5-10 Cent)."""
+    heute = datetime.now().strftime("%d.%m.%Y")
+
+    user_msg = f"""Heute ist der {heute}. Suche nach Märkten, Messen und Veranstaltungen in Wien und Niederösterreich,
+wo Josef seine Honigspirituosen als Aussteller anbieten kann. Finde Veranstaltungen die NACH heute stattfinden.
+
+Mach mehrere gezielte Suchen für verschiedene Kategorien (Genussmarkt, Kunsthandwerksmarkt, Adventmarkt, Hochzeitsmesse, Bauernmarkt) in Wien und NÖ.
+
+Gib mir das Ergebnis als JSON-Array zurück, NUR das JSON, kein anderer Text. Format:
+[
+  {{"name": "Marktname", "ort": "Ort, Bundesland", "datum": "TT.MM.JJJJ oder Zeitraum", "frist": "Bewerbungsfrist falls bekannt, sonst leer", "kategorie": "Genussmarkt/Kunsthandwerk/Advent/Hochzeitsmesse/Bauernmarkt", "link": "https://..."}}
+]
+
+Wichtig: Nur echte, im Web gefundene Veranstaltungen mit Quelle. Keine erfundenen. Wenn du eine Bewerbungsfrist nicht findest, lass das Feld leer."""
+
+    antwort = call_claude_websearch(MARKT_SYSTEM, user_msg, max_searches=6)
+
+    # JSON extrahieren
+    import re as _re
+    try:
+        json_match = _re.search(r'\[.*\]', antwort, _re.DOTALL)
+        maerkte = json.loads(json_match.group()) if json_match else []
+    except:
+        maerkte = []
+
+    if not maerkte:
+        return jsonify({"success": False, "error": "Keine Märkte gefunden oder Antwort nicht lesbar",
+                        "raw": antwort[:500]})
+
+    # Bereits gespeicherte Märkte holen (Dublettenschutz über name+datum)
+    bestehende = sb_get("maerkte", "select=name,datum")
+    bekannt = set()
+    for b in bestehende:
+        bekannt.add((b.get("name", "").lower().strip(), b.get("datum", "").strip()))
+
+    neu_count = 0
+    for m in maerkte:
+        name = (m.get("name") or "").strip()
+        datum = (m.get("datum") or "").strip()
+        if not name:
+            continue
+        if (name.lower(), datum) in bekannt:
+            continue  # Dublette
+        sb_insert("maerkte", {
+            "name": name,
+            "ort": (m.get("ort") or "").strip(),
+            "datum": datum,
+            "frist": (m.get("frist") or "").strip(),
+            "kategorie": (m.get("kategorie") or "").strip(),
+            "link": (m.get("link") or "").strip(),
+            "status": "neu",
+            "gefunden_am": datetime.now().isoformat()
+        })
+        bekannt.add((name.lower(), datum))
+        neu_count += 1
+
+    return jsonify({"success": True, "gefunden": len(maerkte), "neu": neu_count})
+
+@app.route("/maerkte", methods=["GET"])
+def maerkte_liste():
+    """Gibt alle gespeicherten Märkte zurück, neueste zuerst."""
+    rows = sb_get("maerkte", "select=*&order=gefunden_am.desc")
+    return jsonify({"success": True, "maerkte": rows or []})
+
+@app.route("/maerkte/status", methods=["POST"])
+def maerkte_status():
+    """Ändert den Status eines Marktes (neu/interessant/beworben/erledigt)."""
+    data = request.json or {}
+    markt_id = data.get("id")
+    neuer_status = data.get("status", "")
+    if not markt_id:
+        return jsonify({"success": False, "error": "Keine ID"})
+    ok = sb_update("maerkte", f"id=eq.{markt_id}", {"status": neuer_status})
+    return jsonify({"success": bool(ok)})
+
+@app.route("/maerkte/loeschen", methods=["POST"])
+def maerkte_loeschen():
+    """Löscht einen Markt-Eintrag (z.B. Fehltreffer)."""
+    data = request.json or {}
+    markt_id = data.get("id")
+    if not markt_id:
+        return jsonify({"success": False, "error": "Keine ID"})
+    try:
+        r = requests.delete(
+            f"{SUPABASE_URL}/rest/v1/maerkte?id=eq.{markt_id}",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            timeout=10
+        )
+        return jsonify({"success": r.ok})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 if __name__ == "__main__":

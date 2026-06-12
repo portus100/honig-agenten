@@ -178,6 +178,7 @@
   <div class="tab" onclick="switchTab('brand')" id="tab-brand">✨ Marke</div>
   <div class="tab" onclick="switchTab('foto')" id="tab-foto">📸 Foto Agent</div>
   <div class="tab" onclick="switchTab('prospekt')" id="tab-prospekt">📄 Prospekt</div>
+  <div class="tab" onclick="switchTab('maerkte')" id="tab-maerkte">📍 Märkte</div>
 </div>
 
 <div class="body">
@@ -437,6 +438,28 @@
       </div>
     </div>
 
+    <!-- MARKT-SCANNER -->
+    <div class="panel" id="panel-maerkte">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Markt <em>Scanner</em></div>
+          <div class="panel-sub">Findet Märkte & Messen in Wien + NÖ zum Ausstellen</div>
+        </div>
+        <button class="btn btn-dark btn-sm" onclick="maerkteSuchen()" id="maerkteSuchBtn">🔍 Märkte suchen</button>
+      </div>
+
+      <div style="font-size:12px;color:var(--smoke);margin-bottom:16px;line-height:1.6;letter-spacing:.03em">
+        Sucht im Web nach Genuss-, Kunsthandwerks-, Advent- & Bauernmärkten sowie Hochzeitsmessen. Jede Suche kostet ein paar Cent. Treffer kannst du als interessant markieren oder löschen.
+      </div>
+
+      <div class="progress" id="maerkteProg">
+        <div class="progress-label" id="maerkteProgLabel">Suche läuft – das kann bis zu 1 Minute dauern...</div>
+        <div class="progress-track"><div class="progress-fill" id="maerkteProgFill"></div></div>
+      </div>
+
+      <div id="maerkteListe"><div class="empty"><div class="empty-icon">📍</div><h3>Noch keine Märkte</h3><p>Drücke „Märkte suchen", um Veranstaltungen<br>in Wien und Niederösterreich zu finden.</p></div></div>
+    </div>
+
   </div>
 </div>
 
@@ -457,6 +480,7 @@ function switchTab(tab) {
   if (tab === 'foto') loadFotoArchiv();
   if (tab === 'prospekt' && document.getElementById('prospektVorschau').style.display !== 'none') genProspekt();
   if (tab === 'brand') loadBrand();
+  if (tab === 'maerkte') loadMaerkte();
 }
 
 // ── CHAT ──
@@ -1061,6 +1085,118 @@ async function resetBrand() {
   } catch(e) {
     showToast('Fehler: ' + e.message, 'err');
   }
+}
+
+// ── MARKT SCANNER ──
+const MARKT_STATUS = {
+  'neu': {label: 'Neu', color: 'var(--smoke)'},
+  'interessant': {label: '⭐ Interessant', color: 'var(--gold)'},
+  'beworben': {label: '✉️ Beworben', color: 'var(--amber)'},
+  'erledigt': {label: '✓ Erledigt', color: 'var(--green)'}
+};
+
+async function maerkteSuchen() {
+  const btn = document.getElementById('maerkteSuchBtn');
+  btn.disabled = true;
+  btn.textContent = '🔍 Suche...';
+  document.getElementById('maerkteProg').classList.add('on');
+  document.getElementById('maerkteProgFill').style.width = '30%';
+
+  // Fortschritt simulieren, da die Suche lange dauert
+  let p = 30;
+  const tick = setInterval(() => {
+    p = Math.min(p + 5, 90);
+    document.getElementById('maerkteProgFill').style.width = p + '%';
+  }, 3000);
+
+  try {
+    const res = await fetch('/maerkte/suchen', {method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'});
+    const data = await res.json();
+    clearInterval(tick);
+    document.getElementById('maerkteProgFill').style.width = '100%';
+    setTimeout(() => {
+      document.getElementById('maerkteProg').classList.remove('on');
+      document.getElementById('maerkteProgFill').style.width = '0%';
+    }, 500);
+
+    if (data.success) {
+      showToast(`${data.neu} neue Märkte gefunden (${data.gefunden} gesamt)`, 'ok');
+      loadMaerkte();
+    } else {
+      showToast('Keine Märkte gefunden: ' + (data.error || ''), 'err');
+    }
+  } catch(e) {
+    clearInterval(tick);
+    document.getElementById('maerkteProg').classList.remove('on');
+    showToast('Fehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Märkte suchen';
+  }
+}
+
+async function loadMaerkte() {
+  try {
+    const res = await fetch('/maerkte');
+    const data = await res.json();
+    if (data.success) renderMaerkte(data.maerkte);
+  } catch(e) {
+    showToast('Märkte konnten nicht geladen werden', 'err');
+  }
+}
+
+function renderMaerkte(maerkte) {
+  const cnt = document.getElementById('maerkteListe');
+  if (!maerkte || maerkte.length === 0) {
+    cnt.innerHTML = '<div class="empty"><div class="empty-icon">📍</div><h3>Noch keine Märkte</h3><p>Drücke „Märkte suchen", um Veranstaltungen<br>in Wien und Niederösterreich zu finden.</p></div>';
+    return;
+  }
+  cnt.innerHTML = maerkte.map(m => {
+    const st = MARKT_STATUS[m.status] || MARKT_STATUS['neu'];
+    const fristTxt = m.frist ? `<div style="font-size:12px;color:var(--amber);margin-top:2px">⏰ Bewerbungsfrist: ${m.frist}</div>` : '';
+    const linkTxt = m.link ? `<a href="${m.link}" target="_blank" style="font-size:12px;color:var(--gold);text-decoration:none">🔗 Zur Veranstaltung</a>` : '';
+    return `
+      <div class="foto-card">
+        <div class="foto-card-header">
+          <div>
+            <div class="foto-datum" style="font-size:16px">${m.name}</div>
+            <div style="font-size:11px;color:var(--smoke);letter-spacing:.05em;margin-top:2px">${m.kategorie || ''}</div>
+          </div>
+          <div style="font-size:11px;color:${st.color};white-space:nowrap">${st.label}</div>
+        </div>
+        <div style="font-size:13px;line-height:1.7;margin:8px 0">
+          📍 ${m.ort || 'Ort unbekannt'}<br>
+          📅 ${m.datum || 'Datum unbekannt'}
+          ${fristTxt}
+        </div>
+        <div style="margin-bottom:10px">${linkTxt}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="setMarktStatus(${m.id},'interessant')">⭐</button>
+          <button class="btn btn-ghost btn-sm" onclick="setMarktStatus(${m.id},'beworben')">✉️</button>
+          <button class="btn btn-ghost btn-sm" onclick="setMarktStatus(${m.id},'erledigt')">✓</button>
+          <button class="btn btn-ghost btn-sm" onclick="loescheMarkt(${m.id})">🗑</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function setMarktStatus(id, status) {
+  try {
+    const res = await fetch('/maerkte/status', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, status})});
+    const data = await res.json();
+    if (data.success) { showToast('Status aktualisiert', 'ok'); loadMaerkte(); }
+    else showToast('Fehler beim Aktualisieren', 'err');
+  } catch(e) { showToast('Fehler: ' + e.message, 'err'); }
+}
+
+async function loescheMarkt(id) {
+  if (!confirm('Diesen Markt-Eintrag löschen?')) return;
+  try {
+    const res = await fetch('/maerkte/loeschen', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id})});
+    const data = await res.json();
+    if (data.success) { showToast('Gelöscht', 'ok'); loadMaerkte(); }
+    else showToast('Fehler beim Löschen', 'err');
+  } catch(e) { showToast('Fehler: ' + e.message, 'err'); }
 }
 
 // INIT
