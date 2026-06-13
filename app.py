@@ -1467,6 +1467,40 @@ def maerkte_loeschen():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/maerkte/test", methods=["GET"])
+def maerkte_test():
+    """Diagnose: zeigt die ROHE Claude-Antwort ohne JSON-Verarbeitung.
+    Im Browser aufrufbar: /maerkte/test"""
+    heute = datetime.now().strftime("%d.%m.%Y")
+    user_msg = f"""Heute ist der {heute}. Suche nach 2-3 Märkten in Wien oder Niederösterreich,
+wo Josef seine Honigspirituosen als Aussteller anbieten kann (Genussmarkt, Bauernmarkt o.ä.), die nach heute stattfinden.
+
+Gib das Ergebnis als JSON-Array zurück, NUR das JSON, kein anderer Text, keine Markdown-Codeblöcke. Format:
+[{{"name":"...","ort":"...","datum":"...","frist":"...","kategorie":"...","link":"..."}}]"""
+
+    antwort = call_claude_websearch(MARKT_SYSTEM, user_msg, max_searches=3)
+
+    # Zeige was die JSON-Extraktion daraus macht
+    import re as _re
+    extrahiert = None
+    fehler = None
+    try:
+        json_match = _re.search(r'\[.*\]', antwort, _re.DOTALL)
+        if json_match:
+            extrahiert = json.loads(json_match.group())
+        else:
+            fehler = "Kein [...] Block in der Antwort gefunden"
+    except Exception as e:
+        fehler = f"JSON-Parse-Fehler: {str(e)}"
+
+    return jsonify({
+        "rohe_antwort": antwort,
+        "extrahiert_erfolgreich": extrahiert is not None,
+        "anzahl_gefunden": len(extrahiert) if extrahiert else 0,
+        "fehler": fehler
+    })
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
