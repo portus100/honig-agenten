@@ -1349,116 +1349,211 @@ def prospekt_preview(zielgruppe):
 
 
 # ════════════════════════════════════════
-# MARKT-/MESSE-SCANNER
-# Sucht Märkte & Messen in Wien + NÖ wo Josef ausstellen kann
+# VERANSTALTER-RADAR
+# Statt Events zu suchen: Veranstalter als dauerhafte Datenbank führen,
+# auf Ausschreibungen überwachen, mit Josef-Fit-Score bewerten.
+# Architektur-Idee: Melli
 # ════════════════════════════════════════
 
-MARKT_SYSTEM = """Du bist der Markt-Scout von Honigspirituosen Josef Mayer aus Wien.
-Josef ist Berufsimker und stellt Premium-Spirituosen her (Gin, Whisky, Rum mit eigenem Honig).
-Er sucht Märkte, Messen und Veranstaltungen in WIEN und NIEDERÖSTERREICH, wo er seine Produkte
-als Aussteller anbieten/verkaufen kann.
-
-RELEVANTE ARTEN:
-- Genussmärkte, Spezialitätenmärkte, Feinkostmärkte
-- Genuss-/Vital-/Kulinarik-Messen
-- Flanier-, Stadtteil- und Straßenmärkte (mit Genuss-Anteil)
-- Kunsthandwerksmärkte / Designmärkte
-- Advent-/Weihnachtsmärkte
-- Bauernmärkte / Regionalmärkte
-- Hochzeitsmessen (Spirituosen als Geschenk/Gastgeschenk)
-
-NICHT relevant: reine Flohmärkte ohne Genuss, reine Automessen, reine Fachmessen ohne Endkunden.
-
-Suche im Web nach solchen Veranstaltungen, die in der ZUKUNFT stattfinden (ab heute).
-Für jeden gefundenen Markt sammle: Name, Ort, Datum, Bewerbungsfrist für Aussteller (falls auffindbar), Website-Link, Kategorie."""
-
-@app.route("/maerkte/suchen", methods=["POST"])
-def maerkte_suchen():
-    """Sucht per Claude Web-Search nach Märkten. Auf Knopfdruck (kostet ~5-10 Cent)."""
-    heute = datetime.now().strftime("%d.%m.%Y")
-
-    user_msg = f"""Heute ist der {heute}. Suche nach Märkten, Messen und Veranstaltungen in Wien und Niederösterreich,
-wo Josef seine Honigspirituosen als Aussteller anbieten kann. Finde Veranstaltungen die NACH heute stattfinden.
-
-Mach mehrere gezielte Suchen für verschiedene Kategorien (Genussmarkt, Kunsthandwerksmarkt, Adventmarkt, Hochzeitsmesse, Bauernmarkt) in Wien und NÖ.
-
-Gib mir das Ergebnis als JSON-Array zurück, NUR das JSON, kein anderer Text. Format:
-[
-  {{"name": "Marktname", "ort": "Ort, Bundesland", "datum": "TT.MM.JJJJ oder Zeitraum", "frist": "Bewerbungsfrist falls bekannt, sonst leer", "kategorie": "Genussmarkt/Kunsthandwerk/Advent/Hochzeitsmesse/Bauernmarkt", "link": "https://..."}}
+# Startbestand – von Melli vorgeschlagene Veranstalter Wien/NÖ
+VERANSTALTER_SEED = [
+    {"name": "Wintermarkt Prater", "website": "https://www.wintermarkt.at/aussteller",
+     "marktart": "Adventmarkt", "region": "Wien"},
+    {"name": "Weihnachtsmarkt am Hof", "website": "https://www.weihnachtsmarkt-hof.at/",
+     "marktart": "Adventmarkt", "region": "Wien"},
+    {"name": "Weihnachtsquartier Wien", "website": "https://weihnachtsquartier.at/",
+     "marktart": "Adventmarkt", "region": "Wien"},
+    {"name": "Design Depot Wien", "website": "https://www.design-depot.at/",
+     "marktart": "Design-/Manufakturmarkt", "region": "Wien"},
+    {"name": "Weihnachtsmarkt Schloss Schönbrunn", "website": "https://www.weihnachtsmarkt-schoenbrunn.at/",
+     "marktart": "Adventmarkt", "region": "Wien"},
+    {"name": "MAX.CENTER Weihnachtsmarkt", "website": "https://www.maxcenter.at/de/news/aussteller-gesucht-weihnachtsmarkt/",
+     "marktart": "Adventmarkt", "region": "Niederösterreich"},
 ]
 
-Wichtig: Nur echte, im Web gefundene Veranstaltungen mit Quelle. Keine erfundenen. Wenn du eine Bewerbungsfrist nicht findest, lass das Feld leer."""
+# Saisonale Gewichtung – welche Marktart ist je nach Monat gerade aktuell für BEWERBUNGEN
+def saison_gewichtung():
+    monat = datetime.now().month
+    # Bewerbungsfristen laufen meist Monate vor dem Event
+    if monat in (6, 7, 8):       # Sommer → Advent-Bewerbungen laufen
+        return {"fokus": "Adventmärkte", "hinweis": "Jetzt laufen die Bewerbungsfristen für Advent-/Weihnachtsmärkte (Saison Nov/Dez)."}
+    elif monat in (1, 2, 3):     # Winter → Frühling/Ostern
+        return {"fokus": "Frühlings-/Ostermärkte", "hinweis": "Jetzt laufen Bewerbungen für Frühlings-, Oster- und Genussmärkte."}
+    elif monat in (4, 5):        # Frühling → Sommerfeste
+        return {"fokus": "Sommerfeste/Genussmärkte", "hinweis": "Jetzt laufen Bewerbungen für Sommerfeste und Genussmärkte."}
+    else:                        # 9,10,11,12 → Herbst/Genuss + nächstes Frühjahr
+        return {"fokus": "Herbst-/Genussmärkte", "hinweis": "Jetzt laufen Bewerbungen für Herbst-/Genussmärkte und teils schon nächstes Frühjahr."}
 
-    antwort = call_claude_websearch(MARKT_SYSTEM, user_msg, max_searches=6)
+RADAR_SYSTEM = """Du bist das Veranstalter-Radar von Honigspirituosen Josef Mayer aus Wien.
+Josef ist Berufsimker mit Premium-Spirituosen (Gin, Whisky, Rum mit eigenem Honig, hochpreisig).
+Er sucht NICHT einzelne Events, sondern VERANSTALTER von Märkten/Messen in Wien + Niederösterreich,
+bei denen er sich als Aussteller bewerben kann – mit Fokus auf Premium, Verkostung, Genuss.
 
-    # JSON extrahieren
+DEINE AUFGABE: Finde Veranstalter und ihre aktuellen Aussteller-Ausschreibungen. Suche gezielt nach
+Ausschreibungs-Begriffen ("Aussteller gesucht", "Standanmeldung", "jetzt bewerben", "Marktstand",
+"Teilnahme", "exhibitor"), NICHT nach Event-Berichten.
+
+JOSEF-FIT-SCORE (0-100) für jeden Veranstalter berechnen:
+- Spirituosen/Alkohol als Aussteller erlaubt: +30
+- Verkostung am Stand erlaubt: +20
+- Erwartete Besucher über 5.000: +15
+- Standgebühr unter 1.000 €: +10
+- Premium-/hochwertige Positionierung des Marktes: +15
+- Wiederbewerbung / jährlich wiederkehrend: +10
+Wenn eine Info nicht auffindbar ist, schätze konservativ und vermerke es."""
+
+
+def veranstalter_seed_anlegen():
+    """Legt die Seed-Veranstalter an, falls die Tabelle noch leer ist."""
+    bestehende = sb_get("veranstalter", "select=name")
+    if bestehende and len(bestehende) > 0:
+        return 0  # schon befüllt
+    count = 0
+    for v in VERANSTALTER_SEED:
+        sb_insert("veranstalter", {
+            "name": v["name"],
+            "website": v["website"],
+            "marktart": v["marktart"],
+            "region": v["region"],
+            "kontakt": "",
+            "fristfenster": "",
+            "besucher": "",
+            "fit_score": 0,
+            "status": "neu",
+            "notiz": "Startbestand (Melli)",
+            "geprueft_am": ""
+        })
+        count += 1
+    return count
+
+
+@app.route("/veranstalter", methods=["GET"])
+def veranstalter_liste():
+    """Alle Veranstalter, nach Fit-Score sortiert (beste zuerst)."""
+    # Beim ersten Aufruf Seed anlegen
+    veranstalter_seed_anlegen()
+    rows = sb_get("veranstalter", "select=*&order=fit_score.desc")
+    saison = saison_gewichtung()
+    return jsonify({"success": True, "veranstalter": rows or [], "saison": saison})
+
+
+@app.route("/veranstalter/hinzufuegen", methods=["POST"])
+def veranstalter_hinzufuegen():
+    """Manuell einen Veranstalter eintragen (Josef/Melli)."""
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"success": False, "error": "Kein Name"})
+    sb_insert("veranstalter", {
+        "name": name,
+        "website": (data.get("website") or "").strip(),
+        "marktart": (data.get("marktart") or "").strip(),
+        "region": (data.get("region") or "").strip(),
+        "kontakt": (data.get("kontakt") or "").strip(),
+        "fristfenster": "",
+        "besucher": "",
+        "fit_score": 0,
+        "status": "neu",
+        "notiz": "Manuell hinzugefügt",
+        "geprueft_am": ""
+    })
+    return jsonify({"success": True})
+
+
+@app.route("/veranstalter/radar", methods=["POST"])
+def veranstalter_radar():
+    """Radar-Lauf: prüft bekannte Veranstalter auf Ausschreibungen + sucht neue.
+    Bewertet alles mit Josef-Fit-Score. Auf Knopfdruck (kostet ein paar Cent)."""
+    veranstalter_seed_anlegen()
+    heute = datetime.now().strftime("%d.%m.%Y")
+    saison = saison_gewichtung()
+
+    # Bekannte Veranstalter für den Kontext
+    bekannte = sb_get("veranstalter", "select=name,website,marktart")
+    bekannte_namen = ", ".join(b.get("name", "") for b in (bekannte or []))
+
+    user_msg = f"""Heute ist der {heute}. SAISON-FOKUS: {saison['hinweis']}
+
+Prüfe per Web-Suche, welche dieser bekannten Veranstalter gerade eine offene Aussteller-Ausschreibung haben (Bewerbungsfrist, Anmeldeformular, "jetzt bewerben"):
+{bekannte_namen}
+
+Suche ZUSÄTZLICH nach 2-3 NEUEN Veranstaltern in Wien/NÖ mit aktueller Aussteller-Ausschreibung, passend zum Saison-Fokus ({saison['fokus']}). Premium/Genuss bevorzugt.
+
+Gib NUR ein JSON-Array zurück, kein anderer Text, keine Markdown-Blöcke:
+[{{"name":"Veranstalter","website":"https://...","marktart":"Adventmarkt/Genussmarkt/Design/Hochzeit","region":"Wien/Niederösterreich","fristfenster":"z.B. Bewerbung bis 31.08.2026 oder leer","besucher":"z.B. 10000 oder leer","fit_score":0-100,"fit_begruendung":"kurz warum dieser Score"}}]
+
+Den fit_score nach den genannten Kriterien berechnen. Nur echte, im Web gefundene Veranstalter."""
+
+    antwort = call_claude_websearch(RADAR_SYSTEM, user_msg, max_searches=6)
+
     import re as _re
     try:
         json_match = _re.search(r'\[.*\]', antwort, _re.DOTALL)
-        maerkte = json.loads(json_match.group()) if json_match else []
+        gefunden = json.loads(json_match.group()) if json_match else []
     except:
-        maerkte = []
+        gefunden = []
 
-    if not maerkte:
-        return jsonify({"success": False, "error": "Keine Märkte gefunden oder Antwort nicht lesbar",
+    if not gefunden:
+        return jsonify({"success": False, "error": "Keine Ergebnisse oder Antwort nicht lesbar",
                         "raw": antwort[:500]})
 
-    # Bereits gespeicherte Märkte holen (Dublettenschutz über name+datum)
-    bestehende = sb_get("maerkte", "select=name,datum")
-    bekannt = set()
-    for b in bestehende:
-        bekannt.add((b.get("name", "").lower().strip(), b.get("datum", "").strip()))
+    # Bestehende holen für Update/Insert-Entscheidung
+    bestehende = sb_get("veranstalter", "select=id,name")
+    name_zu_id = {b.get("name", "").lower().strip(): b.get("id") for b in (bestehende or [])}
 
     neu_count = 0
-    for m in maerkte:
-        name = (m.get("name") or "").strip()
-        datum = (m.get("datum") or "").strip()
+    update_count = 0
+    for g in gefunden:
+        name = (g.get("name") or "").strip()
         if not name:
             continue
-        if (name.lower(), datum) in bekannt:
-            continue  # Dublette
-        sb_insert("maerkte", {
-            "name": name,
-            "ort": (m.get("ort") or "").strip(),
-            "datum": datum,
-            "frist": (m.get("frist") or "").strip(),
-            "kategorie": (m.get("kategorie") or "").strip(),
-            "link": (m.get("link") or "").strip(),
-            "status": "neu",
-            "gefunden_am": datetime.now().isoformat()
-        })
-        bekannt.add((name.lower(), datum))
-        neu_count += 1
+        payload = {
+            "website": (g.get("website") or "").strip(),
+            "marktart": (g.get("marktart") or "").strip(),
+            "region": (g.get("region") or "").strip(),
+            "fristfenster": (g.get("fristfenster") or "").strip(),
+            "besucher": str(g.get("besucher") or "").strip(),
+            "fit_score": int(g.get("fit_score") or 0),
+            "notiz": (g.get("fit_begruendung") or "").strip(),
+            "geprueft_am": datetime.now().isoformat()
+        }
+        existing_id = name_zu_id.get(name.lower())
+        if existing_id:
+            sb_update("veranstalter", f"id=eq.{existing_id}", payload)
+            update_count += 1
+        else:
+            payload["name"] = name
+            payload["kontakt"] = ""
+            payload["status"] = "neu"
+            sb_insert("veranstalter", payload)
+            neu_count += 1
 
-    return jsonify({"success": True, "gefunden": len(maerkte), "neu": neu_count})
+    return jsonify({"success": True, "neu": neu_count, "aktualisiert": update_count,
+                    "gesamt": len(gefunden)})
 
-@app.route("/maerkte", methods=["GET"])
-def maerkte_liste():
-    """Gibt alle gespeicherten Märkte zurück, neueste zuerst."""
-    rows = sb_get("maerkte", "select=*&order=gefunden_am.desc")
-    return jsonify({"success": True, "maerkte": rows or []})
 
-@app.route("/maerkte/status", methods=["POST"])
-def maerkte_status():
-    """Ändert den Status eines Marktes (neu/interessant/beworben/erledigt)."""
+@app.route("/veranstalter/status", methods=["POST"])
+def veranstalter_status():
+    """Status ändern (neu/interessant/beworben/erledigt)."""
     data = request.json or {}
-    markt_id = data.get("id")
-    neuer_status = data.get("status", "")
-    if not markt_id:
+    vid = data.get("id")
+    status = data.get("status", "")
+    if not vid:
         return jsonify({"success": False, "error": "Keine ID"})
-    ok = sb_update("maerkte", f"id=eq.{markt_id}", {"status": neuer_status})
+    ok = sb_update("veranstalter", f"id=eq.{vid}", {"status": status})
     return jsonify({"success": bool(ok)})
 
-@app.route("/maerkte/loeschen", methods=["POST"])
-def maerkte_loeschen():
-    """Löscht einen Markt-Eintrag (z.B. Fehltreffer)."""
+
+@app.route("/veranstalter/loeschen", methods=["POST"])
+def veranstalter_loeschen():
+    """Veranstalter löschen."""
     data = request.json or {}
-    markt_id = data.get("id")
-    if not markt_id:
+    vid = data.get("id")
+    if not vid:
         return jsonify({"success": False, "error": "Keine ID"})
     try:
         r = requests.delete(
-            f"{SUPABASE_URL}/rest/v1/maerkte?id=eq.{markt_id}",
+            f"{SUPABASE_URL}/rest/v1/veranstalter?id=eq.{vid}",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
             timeout=10
         )
@@ -1467,37 +1562,33 @@ def maerkte_loeschen():
         return jsonify({"success": False, "error": str(e)})
 
 
-@app.route("/maerkte/test", methods=["GET"])
-def maerkte_test():
-    """Diagnose: zeigt die ROHE Claude-Antwort ohne JSON-Verarbeitung.
-    Im Browser aufrufbar: /maerkte/test"""
+@app.route("/veranstalter/test", methods=["GET"])
+def veranstalter_test():
+    """Diagnose: rohe Claude-Antwort des Radar-Laufs, im Browser aufrufbar."""
     heute = datetime.now().strftime("%d.%m.%Y")
-    user_msg = f"""Heute ist der {heute}. Suche nach 2-3 Märkten in Wien oder Niederösterreich,
-wo Josef seine Honigspirituosen als Aussteller anbieten kann (Genussmarkt, Bauernmarkt o.ä.), die nach heute stattfinden.
-
-Gib das Ergebnis als JSON-Array zurück, NUR das JSON, kein anderer Text, keine Markdown-Codeblöcke. Format:
-[{{"name":"...","ort":"...","datum":"...","frist":"...","kategorie":"...","link":"..."}}]"""
-
-    antwort = call_claude_websearch(MARKT_SYSTEM, user_msg, max_searches=3)
-
-    # Zeige was die JSON-Extraktion daraus macht
+    saison = saison_gewichtung()
+    user_msg = f"""Heute ist der {heute}. Saison-Fokus: {saison['fokus']}.
+Suche 2 Veranstalter in Wien/NÖ mit aktueller Aussteller-Ausschreibung (Premium/Genuss/Advent).
+Gib NUR ein JSON-Array zurück, kein anderer Text:
+[{{"name":"...","website":"...","marktart":"...","region":"...","fristfenster":"...","besucher":"...","fit_score":0,"fit_begruendung":"..."}}]"""
+    antwort = call_claude_websearch(RADAR_SYSTEM, user_msg, max_searches=3)
     import re as _re
     extrahiert = None
     fehler = None
     try:
-        json_match = _re.search(r'\[.*\]', antwort, _re.DOTALL)
-        if json_match:
-            extrahiert = json.loads(json_match.group())
+        m = _re.search(r'\[.*\]', antwort, _re.DOTALL)
+        if m:
+            extrahiert = json.loads(m.group())
         else:
-            fehler = "Kein [...] Block in der Antwort gefunden"
+            fehler = "Kein [...] Block gefunden"
     except Exception as e:
-        fehler = f"JSON-Parse-Fehler: {str(e)}"
-
+        fehler = f"JSON-Fehler: {str(e)}"
     return jsonify({
         "rohe_antwort": antwort,
         "extrahiert_erfolgreich": extrahiert is not None,
-        "anzahl_gefunden": len(extrahiert) if extrahiert else 0,
-        "fehler": fehler
+        "anzahl": len(extrahiert) if extrahiert else 0,
+        "fehler": fehler,
+        "saison": saison
     })
 
 
