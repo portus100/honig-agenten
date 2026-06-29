@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Honigspirituosen – Partner</title>
+<style>
+  :root {
+    --ink:#0A0807; --paper:#F5F0E8; --gold:#B8860B; --goldlt:#D4A843;
+    --amber:#8B6914; --cream:#EDE8DB; --smoke:#C8C0B0; --border:#D0C8B8;
+    --red:#8B2020; --green:#2D5A2D;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--paper); color:var(--ink); line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:680px; margin:0 auto; padding:20px 16px 80px; }
+  header {
+    text-align:center; padding:24px 0 16px; border-bottom:2px solid var(--ink); margin-bottom:24px;
+  }
+  header h1 { font-size:22px; font-weight:700; letter-spacing:-.02em; }
+  header .sub { font-size:12px; color:var(--amber); letter-spacing:.1em; text-transform:uppercase; margin-top:4px; }
+
+  .card {
+    background:var(--cream); border:1px solid var(--border); border-radius:8px;
+    padding:18px; margin-bottom:16px;
+  }
+  label { display:block; font-size:12px; color:var(--amber); letter-spacing:.05em; margin-bottom:6px; text-transform:uppercase; }
+  input, select {
+    width:100%; padding:12px; border:1px solid var(--border); border-radius:6px;
+    background:var(--paper); color:var(--ink); font-size:15px; font-family:inherit; margin-bottom:14px;
+  }
+  .btn {
+    background:var(--ink); color:var(--paper); border:none; border-radius:6px;
+    padding:13px 20px; font-size:15px; font-weight:600; cursor:pointer; width:100%;
+    font-family:inherit;
+  }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-gold { background:var(--gold); }
+  .btn-sm { width:auto; padding:8px 14px; font-size:13px; }
+  .btn-ghost { background:transparent; color:var(--ink); border:1px solid var(--border); }
+
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+
+  .limit-info {
+    text-align:center; font-size:13px; color:var(--amber); margin-bottom:16px;
+    padding:8px; background:var(--cream); border-radius:6px;
+  }
+
+  .lead {
+    background:var(--cream); border:1px solid var(--border); border-radius:8px;
+    padding:16px; margin-bottom:12px;
+  }
+  .lead-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:8px; }
+  .lead-name { font-size:17px; font-weight:700; }
+  .lead-meta { font-size:13px; color:var(--amber); }
+  .lead-info { font-size:14px; margin:8px 0; }
+  .lead-info a { color:var(--gold); }
+  .status-badge { font-size:11px; padding:3px 8px; border-radius:10px; white-space:nowrap; font-weight:600; }
+  .st-neu { background:var(--smoke); color:var(--ink); }
+  .st-angeschrieben { background:var(--goldlt); color:var(--ink); }
+  .st-termin { background:var(--amber); color:var(--paper); }
+  .st-gekauft { background:var(--green); color:var(--paper); }
+  .st-abgelehnt { background:var(--red); color:var(--paper); }
+
+  .email-box {
+    background:var(--paper); border:1px solid var(--border); border-radius:6px;
+    padding:12px; font-size:13px; white-space:pre-wrap; margin:10px 0;
+    max-height:120px; overflow-y:auto;
+  }
+  .status-btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .status-btns .btn { width:auto; padding:7px 12px; font-size:12px; }
+
+  .empty { text-align:center; padding:50px 20px; color:var(--amber); }
+  .empty-icon { font-size:40px; margin-bottom:12px; }
+
+  .toast {
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    background:var(--ink); color:var(--paper); padding:12px 20px; border-radius:8px;
+    font-size:14px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:100;
+  }
+  .toast.on { opacity:1; }
+  .hidden { display:none; }
+  .spinner { text-align:center; padding:20px; color:var(--amber); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🍯 Honigspirituosen</h1>
+    <div class="sub">Vertriebspartner</div>
+  </header>
+
+  <!-- LOGIN -->
+  <div id="loginView">
+    <div class="card">
+      <label>Name</label>
+      <input type="text" id="loginName" placeholder="Dein Benutzername" autocomplete="username">
+      <label>Passwort</label>
+      <input type="password" id="loginPw" placeholder="Passwort" autocomplete="current-password">
+      <button class="btn" onclick="login()" id="loginBtn">Anmelden</button>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="appView" class="hidden">
+
+    <!-- HEUTE ANRUFEN (Follow-ups) -->
+    <div id="followupSection" class="hidden">
+      <div style="background:#8B2020;color:#F5F0E8;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+        <div style="font-weight:700;font-size:15px;margin-bottom:10px">📞 Heute anrufen</div>
+        <div id="followupListe"></div>
+      </div>
+    </div>
+
+    <div class="limit-info" id="limitInfo">Scans heute: – / –</div>
+
+    <div class="card">
+      <label>Was suchen</label>
+      <select id="targetType">
+        <option value="Cocktailbar">Cocktailbars</option>
+        <option value="Bar">Bars</option>
+      </select>
+      <label>Bezirk</label>
+      <select id="bezirk">
+        <option value="Wien">Ganz Wien</option>
+        <option value="1010 Wien">1. – Innere Stadt</option>
+        <option value="1020 Wien">2. – Leopoldstadt</option>
+        <option value="1030 Wien">3. – Landstraße</option>
+        <option value="1040 Wien">4. – Wieden</option>
+        <option value="1050 Wien">5. – Margareten</option>
+        <option value="1060 Wien">6. – Mariahilf</option>
+        <option value="1070 Wien">7. – Neubau</option>
+        <option value="1080 Wien">8. – Josefstadt</option>
+        <option value="1090 Wien">9. – Alsergrund</option>
+        <option value="1100 Wien">10. – Favoriten</option>
+        <option value="1110 Wien">11. – Simmering</option>
+        <option value="1120 Wien">12. – Meidling</option>
+        <option value="1130 Wien">13. – Hietzing</option>
+        <option value="1140 Wien">14. – Penzing</option>
+        <option value="1150 Wien">15. – Rudolfsheim-Fünfhaus</option>
+        <option value="1160 Wien">16. – Ottakring</option>
+        <option value="1170 Wien">17. – Hernals</option>
+        <option value="1180 Wien">18. – Währing</option>
+        <option value="1190 Wien">19. – Döbling</option>
+        <option value="1200 Wien">20. – Brigittenau</option>
+        <option value="1210 Wien">21. – Floridsdorf</option>
+        <option value="1220 Wien">22. – Donaustadt</option>
+        <option value="1230 Wien">23. – Liesing</option>
+      </select>
+      <button class="btn btn-gold" onclick="scan()" id="scanBtn">🔍 Suchen</button>
+    </div>
+
+    <div id="scanSpinner" class="spinner hidden">Suche läuft, einen Moment…</div>
+
+    <div id="leadsList"></div>
+
+    <div style="text-align:center; margin-top:20px">
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Abmelden</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let TOKEN = null;
+const STATUS = {
+  'neu': {label:'Neu', cls:'st-neu'},
+  'angeschrieben': {label:'Angeschrieben', cls:'st-angeschrieben'},
+  'termin': {label:'Termin', cls:'st-termin'},
+  'gekauft': {label:'Gekauft', cls:'st-gekauft'},
+  'abgelehnt': {label:'Abgelehnt', cls:'st-abgelehnt'}
+};
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('on');
+  setTimeout(() => t.classList.remove('on'), 2500);
+}
+
+async function login() {
+  const name = document.getElementById('loginName').value.trim();
+  const pw = document.getElementById('loginPw').value;
+  if (!name || !pw) { showToast('Name und Passwort eingeben'); return; }
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'Anmelden…';
+  try {
+    const res = await fetch('/partner/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, passwort: pw})
+    });
+    const data = await res.json();
+    if (data.success) {
+      TOKEN = data.token;
+      try { sessionStorage.setItem('ptoken', TOKEN); } catch(e){}
+      zeigeApp();
+    } else {
+      showToast(data.error || 'Login fehlgeschlagen');
+    }
+  } catch(e) {
+    showToast('Fehler: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Anmelden';
+  }
+}
+
+function logout() {
+  TOKEN = null;
+  try { sessionStorage.removeItem('ptoken'); } catch(e){}
+  document.getElementById('appView').classList.add('hidden');
+  document.getElementById('loginView').classList.remove('hidden');
+}
+
+function zeigeApp() {
+  document.getElementById('loginView').classList.add('hidden');
+  document.getElementById('appView').classList.remove('hidden');
+  ladeLeads();
+  ladeFollowups();
+}
+
+async function ladeFollowups() {
+  try {
+    const res = await fetch('/partner/followups', {headers:{'Authorization':'Bearer '+TOKEN}});
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.success && data.followups && data.followups.length > 0) {
+      document.getElementById('followupSection').classList.remove('hidden');
+      document.getElementById('followupListe').innerHTML = data.followups.map(l => `
+        <div style="background:rgba(255,255,255,0.12);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+          <div style="font-weight:700;font-size:15px">${l.name}</div>
+          <div style="font-size:13px;opacity:.85;margin-top:2px">${l.address || ''}</div>
+          ${l.phone ? `<a href="tel:${l.phone}" style="display:inline-block;margin-top:6px;color:#F5F0E8;font-size:14px;font-weight:600">📞 ${l.phone}</a>` : '<div style="font-size:12px;opacity:.7;margin-top:4px">Keine Telefonnummer</div>'}
+        </div>`).join('');
+    } else {
+      document.getElementById('followupSection').classList.add('hidden');
+    }
+  } catch(e) {}
+}
+
+async function scan() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true;
+  document.getElementById('scanSpinner').classList.remove('hidden');
+  try {
+    const res = await fetch('/partner/scan', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({
+        target_type: document.getElementById('targetType').value,
+        bezirk: document.getElementById('bezirk').value,
+        max_results: 16
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${data.qualifiziert} neue Leads gefunden`);
+      ladeLeads();
+    } else {
+      showToast(data.error || 'Suche fehlgeschlagen');
+    }
+  } catch(e) {
+    showToast('Fehler: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    document.getElementById('scanSpinner').classList.add('hidden');
+  }
+}
+
+async function ladeLeads() {
+  try {
+    const res = await fetch('/partner/leads', {headers:{'Authorization':'Bearer '+TOKEN}});
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById('limitInfo').textContent =
+        `Scans heute: ${data.scans_genutzt} / ${data.scans_limit}`;
+      renderLeads(data.leads);
+    }
+  } catch(e) { showToast('Leads konnten nicht geladen werden'); }
+}
+
+function renderLeads(leads) {
+  const cnt = document.getElementById('leadsList');
+  if (!leads || leads.length === 0) {
+    cnt.innerHTML = '<div class="empty"><div class="empty-icon">🍸</div><p>Noch keine Leads.<br>Drück „Suchen", um Bars zu finden.</p></div>';
+    return;
+  }
+  cnt.innerHTML = leads.map(l => {
+    const st = STATUS[l.status] || STATUS['neu'];
+    const phone = l.phone ? `📞 <a href="tel:${l.phone}">${l.phone}</a>` : '';
+    const mail = l.contact_email ? `✉️ ${l.contact_email}` : '';
+    const web = l.website ? `🔗 <a href="${l.website}" target="_blank">Website</a>` : '';
+    const rating = l.rating ? `⭐ ${l.rating}` : '';
+    const emailBox = l.email_draft ? `<div class="email-box">${l.email_draft}</div>` : '';
+    const notiz = l.notiz ? `<div style="font-size:12px;color:var(--amber);margin-top:6px">📝 ${l.notiz}</div>` : '';
+    return `
+      <div class="lead">
+        <div class="lead-head">
+          <div>
+            <div class="lead-name">${l.name}</div>
+            <div class="lead-meta">${l.address || ''} ${rating}</div>
+          </div>
+          <span class="status-badge ${st.cls}">${st.label}</span>
+        </div>
+        <div class="lead-info">${[phone, mail, web].filter(Boolean).join(' &nbsp; ')}</div>
+        ${emailBox}
+        ${notiz}
+        <div class="status-btns">
+          <button class="btn btn-ghost" onclick="setStatus(${l.id},'angeschrieben')">Angeschrieben</button>
+          <button class="btn btn-ghost" onclick="setStatus(${l.id},'termin')">Termin</button>
+          <button class="btn btn-ghost" onclick="setStatus(${l.id},'gekauft')">Gekauft</button>
+          <button class="btn btn-ghost" onclick="setStatus(${l.id},'abgelehnt')">Abgelehnt</button>
+          <button class="btn btn-ghost" onclick="addNotiz(${l.id})">📝 Notiz</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function setStatus(id, status) {
+  try {
+    const res = await fetch('/partner/lead/status', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({id, status})
+    });
+    const data = await res.json();
+    if (data.success) { showToast('Gespeichert'); ladeLeads(); }
+    else showToast(data.error || 'Fehler');
+  } catch(e) { showToast('Fehler: ' + e.message); }
+}
+
+async function addNotiz(id) {
+  const notiz = prompt('Notiz zu diesem Lead:');
+  if (notiz === null) return;
+  try {
+    const res = await fetch('/partner/lead/status', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({id, notiz})
+    });
+    const data = await res.json();
+    if (data.success) { showToast('Notiz gespeichert'); ladeLeads(); }
+    else showToast('Fehler');
+  } catch(e) { showToast('Fehler: ' + e.message); }
+}
+
+// Auto-Login wenn Token noch gültig
+window.addEventListener('DOMContentLoaded', async () => {
+  let saved = null;
+  try { saved = sessionStorage.getItem('ptoken'); } catch(e){}
+  if (saved) {
+    TOKEN = saved;
+    try {
+      const res = await fetch('/partner/me', {headers:{'Authorization':'Bearer '+TOKEN}});
+      const data = await res.json();
+      if (data.success) { zeigeApp(); return; }
+    } catch(e){}
+    TOKEN = null;
+  }
+});
+</script>
+</body>
+</html>

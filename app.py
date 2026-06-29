@@ -1592,6 +1592,348 @@ Gib NUR ein JSON-Array zurück, kein anderer Text:
     })
 
 
+# ════════════════════════════════════════
+# PARTNER-SYSTEM (Franchise-Test)
+# Komplett getrennt vom Haupt-Dashboard.
+# Testverkäufer scannt Bars/Cocktailbars, eigene Leads, eigener Login.
+# Tabellen: partner (Logins), partner_leads (seine Leads), partner_scans (Tageslimit)
+# ════════════════════════════════════════
+
+import hashlib
+import secrets as _secrets
+
+# Aktive Sessions: token -> {partner_id, name, expires}
+_PARTNER_SESSIONS = {}
+
+# Admin Sessions (Josef): token -> {name, expires}
+_ADMIN_SESSIONS = {}
+
+PARTNER_SCAN_LIMIT = 5  # Scans pro Tag pro Partner
+
+def _hash_pw(passwort, salt):
+    """Passwort sicher hashen (PBKDF2)."""
+    return hashlib.pbkdf2_hmac("sha256", passwort.encode(), salt.encode(), 100000).hex()
+
+def partner_aus_token(token):
+    """Gibt die Partner-Session zurück, wenn Token gültig, sonst None."""
+    sess = _PARTNER_SESSIONS.get(token)
+    if not sess:
+        return None
+    if datetime.now().timestamp() > sess["expires"]:
+        _PARTNER_SESSIONS.pop(token, None)
+        return None
+    return sess
+
+def _token_aus_request():
+    """Holt das Partner-Token aus dem Authorization-Header."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return None
+
+@app.route("/partner/login", methods=["POST"])
+def partner_login():
+    """Partner-Login. Gibt ein Session-Token zurück."""
+    data = request.json or {}
+    name = (data.get("name") or "").strip().lower()
+    passwort = data.get("passwort") or ""
+    if not name or not passwort:
+        return jsonify({"success": False, "error": "Name und Passwort nötig"})
+
+    rows = sb_get("partner", f"select=*&name=eq.{name}")
+    if not rows or len(rows) == 0:
+        return jsonify({"success": False, "error": "Login fehlgeschlagen"})
+
+    p = rows[0]
+    if _hash_pw(passwort, p.get("salt", "")) != p.get("pw_hash", ""):
+        return jsonify({"success": False, "error": "Login fehlgeschlagen"})
+
+    # Session erstellen (24h gültig)
+    token = _secrets.token_urlsafe(32)
+    _PARTNER_SESSIONS[token] = {
+        "partner_id": p["id"],
+        "name": p["name"],
+        "expires": datetime.now().timestamp() + 86400
+    }
+    return jsonify({"success": True, "token": token, "name": p["name"], "stadt": p.get("stadt", "Wien")})
+
+@app.route("/partner/me", methods=["GET"])
+def partner_me():
+    """Prüft, ob das Token gültig ist (für Auto-Login beim Seitenaufruf)."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False})
+    return jsonify({"success": True, "name": sess["name"]})
+
+def _scans_heute(partner_id):
+    """Zählt die heutigen Scans eines Partners."""
+    heute = datetime.now().strftime("%Y-%m-%d")
+    rows = sb_get("partner_scans", f"select=id&partner_id=eq.{partner_id}&tag=eq.{heute}")
+    return len(rows) if rows else 0
+
+@app.route("/partner/scan", methods=["POST"])
+def partner_scan():
+    """Partner scannt Bars/Cocktailbars. Mit Tageslimit."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+
+    partner_id = sess["partner_id"]
+
+    # Tageslimit prüfen
+    genutzt = _scans_heute(partner_id)
+    if genutzt >= PARTNER_SCAN_LIMIT:
+        return jsonify({"success": False, "error": f"Tageslimit erreicht ({PARTNER_SCAN_LIMIT} Scans/Tag). Morgen wieder!"})
+
+    data = request.json or {}
+    # Feste Auswahl: nur Bar oder Cocktailbar
+    target_type = data.get("target_type", "Cocktailbar")
+    if target_type not in ("Bar", "Cocktailbar"):
+        target_type = "Cocktailbar"
+    bezirk = data.get("bezirk", "Wien")
+    max_results = min(data.get("max_results", 10), 20)
+
+    queries = {
+        "Bar": ["Bar Wien", "Weinbar"],
+        "Cocktailbar": ["Cocktailbar", "Cocktail Lounge"]
+    }.get(target_type, ["Cocktailbar"])
+
+    # Bereits von DIESEM Partner gescannte place_ids
+    bestehende = sb_get("partner_leads", f"select=place_id&partner_id=eq.{partner_id}")
+    schon_da = set(b.get("place_id", "") for b in (bestehende or []) if b.get("place_id"))
+
+    all_places = []
+    seen = set()
+    for q in queries[:2]:
+        for p in search_places(q, bezirk, max_results // 2):
+            pid = p["place_id"]
+            if pid not in seen and pid not in schon_da:
+                seen.add(pid)
+                all_places.append(p)
+
+    appointments = calculate_appointments(["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"])
+
+    qualified = []
+    for place in all_places[:max_results]:
+        analysis = analyze_website(place.get("website", ""))
+        if analysis["score"] >= 1 or place.get("rating", 0) >= 4.0:
+            email = write_email(place, analysis, appointments[:3])
+            lead = {
+                "partner_id": partner_id,
+                "name": place["name"],
+                "address": place["address"],
+                "place_id": place.get("place_id", ""),
+                "website": place.get("website", ""),
+                "phone": place.get("phone", ""),
+                "contact_email": analysis.get("contact_email", ""),
+                "score": analysis["score"],
+                "rating": place.get("rating", 0),
+                "email_draft": email,
+                "target_type": target_type,
+                "status": "neu",
+                "notiz": "",
+                "created_at": datetime.now().isoformat()
+            }
+            qualified.append(lead)
+            sb_insert("partner_leads", lead)
+
+    # Scan protokollieren (fürs Tageslimit)
+    sb_insert("partner_scans", {
+        "partner_id": partner_id,
+        "tag": datetime.now().strftime("%Y-%m-%d"),
+        "target_type": target_type,
+        "bezirk": bezirk,
+        "anzahl": len(qualified),
+        "created_at": datetime.now().isoformat()
+    })
+
+    return jsonify({
+        "success": True,
+        "gefunden": len(all_places),
+        "qualifiziert": len(qualified),
+        "scans_genutzt": genutzt + 1,
+        "scans_limit": PARTNER_SCAN_LIMIT
+    })
+
+@app.route("/partner/leads", methods=["GET"])
+def partner_leads_liste():
+    """Gibt die Leads des eingeloggten Partners zurück."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+
+    rows = sb_get("partner_leads", f"select=*&partner_id=eq.{sess['partner_id']}&order=created_at.desc")
+    genutzt = _scans_heute(sess["partner_id"])
+    return jsonify({
+        "success": True,
+        "leads": rows or [],
+        "scans_genutzt": genutzt,
+        "scans_limit": PARTNER_SCAN_LIMIT
+    })
+
+@app.route("/partner/lead/status", methods=["POST"])
+def partner_lead_status():
+    """Partner setzt den Status eines seiner Leads."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+
+    data = request.json or {}
+    lead_id = data.get("id")
+    status = data.get("status", "")
+    notiz = data.get("notiz")
+    if not lead_id:
+        return jsonify({"success": False, "error": "Keine ID"})
+
+    # Sicherstellen, dass der Lead diesem Partner gehört
+    rows = sb_get("partner_leads", f"select=partner_id&id=eq.{lead_id}")
+    if not rows or rows[0].get("partner_id") != sess["partner_id"]:
+        return jsonify({"success": False, "error": "Nicht erlaubt"}), 403
+
+    update = {}
+    if status:
+        update["status"] = status
+    if notiz is not None:
+        update["notiz"] = notiz
+    ok = sb_update("partner_leads", f"id=eq.{lead_id}", update)
+    return jsonify({"success": bool(ok)})
+
+@app.route("/partner/followups", methods=["GET"])
+def partner_followups():
+    """Gibt Leads zurück, die seit 3+ Tagen keinen Status-Update haben (noch 'neu' oder 'angeschrieben')."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    grenze = (datetime.now() - timedelta(days=3)).isoformat()
+    rows = sb_get("partner_leads",
+        f"select=*&partner_id=eq.{sess['partner_id']}"
+        f"&status=in.(neu,angeschrieben)"
+        f"&created_at=lte.{grenze}"
+        f"&order=created_at.asc")
+    return jsonify({"success": True, "followups": rows or []})
+
+# ── ADMIN LOGIN (Josef) ──
+
+def _admin_aus_token(token):
+    sess = _ADMIN_SESSIONS.get(token)
+    if not sess:
+        return None
+    if datetime.now().timestamp() > sess["expires"]:
+        _ADMIN_SESSIONS.pop(token, None)
+        return None
+    return sess
+
+def _admin_token_aus_request():
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return None
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    data = request.json or {}
+    name = (data.get("name") or "").strip().lower()
+    passwort = data.get("passwort") or ""
+    if not name or not passwort:
+        return jsonify({"success": False, "error": "Name und Passwort nötig"})
+    rows = sb_get("partner", f"select=*&name=eq.{name}&rolle=eq.admin")
+    if not rows or len(rows) == 0:
+        return jsonify({"success": False, "error": "Login fehlgeschlagen"})
+    p = rows[0]
+    if _hash_pw(passwort, p.get("salt", "")) != p.get("pw_hash", ""):
+        return jsonify({"success": False, "error": "Login fehlgeschlagen"})
+    token = _secrets.token_urlsafe(32)
+    _ADMIN_SESSIONS[token] = {
+        "name": p["name"],
+        "expires": datetime.now().timestamp() + 86400
+    }
+    return jsonify({"success": True, "token": token, "name": p["name"]})
+
+@app.route("/admin/me", methods=["GET"])
+def admin_me():
+    token = _admin_token_aus_request()
+    sess = _admin_aus_token(token)
+    if not sess:
+        return jsonify({"success": False}), 401
+    return jsonify({"success": True, "name": sess["name"]})
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    token = _admin_token_aus_request()
+    if token:
+        _ADMIN_SESSIONS.pop(token, None)
+    return jsonify({"success": True})
+
+@app.route("/admin/anlegen", methods=["POST"])
+def admin_anlegen():
+    """Legt den Admin-Account (Josef) an. Einmalig, geschützt durch PARTNER_SETUP_KEY."""
+    data = request.json or {}
+    setup_key = data.get("setup_key", "")
+    erwartet = os.environ.get("PARTNER_SETUP_KEY", "")
+    if not erwartet or setup_key != erwartet:
+        return jsonify({"success": False, "error": "Falscher Setup-Key"}), 403
+    name = (data.get("name") or "").strip().lower()
+    passwort = data.get("passwort") or ""
+    if not name or not passwort:
+        return jsonify({"success": False, "error": "Name und Passwort nötig"})
+    bestehend = sb_get("partner", f"select=id&name=eq.{name}")
+    if bestehend and len(bestehend) > 0:
+        return jsonify({"success": False, "error": "Name existiert bereits"})
+    salt = _secrets.token_hex(16)
+    pw_hash = _hash_pw(passwort, salt)
+    sb_insert("partner", {
+        "name": name,
+        "pw_hash": pw_hash,
+        "salt": salt,
+        "stadt": "Wien",
+        "rolle": "admin",
+        "angelegt": datetime.now().isoformat()
+    })
+    return jsonify({"success": True, "name": name})
+
+@app.route("/partner", methods=["GET"])
+def partner_seite():
+    """Liefert die Partner-Oberfläche (getrennte HTML-Seite)."""
+    return send_file("partner.html")
+
+@app.route("/partner/anlegen", methods=["POST"])
+def partner_anlegen():
+    """Legt einen neuen Partner an. Geschützt durch einen Setup-Schlüssel.
+    Aufruf NUR durch Josef, z.B. per Tool. Setup-Key als ENV PARTNER_SETUP_KEY."""
+    data = request.json or {}
+    setup_key = data.get("setup_key", "")
+    erwartet = os.environ.get("PARTNER_SETUP_KEY", "")
+    if not erwartet or setup_key != erwartet:
+        return jsonify({"success": False, "error": "Falscher Setup-Key"}), 403
+
+    name = (data.get("name") or "").strip().lower()
+    passwort = data.get("passwort") or ""
+    stadt = (data.get("stadt") or "Wien").strip()
+    if not name or not passwort:
+        return jsonify({"success": False, "error": "Name und Passwort nötig"})
+
+    # Existiert der Name schon?
+    bestehend = sb_get("partner", f"select=id&name=eq.{name}")
+    if bestehend and len(bestehend) > 0:
+        return jsonify({"success": False, "error": "Name existiert bereits"})
+
+    salt = _secrets.token_hex(16)
+    pw_hash = _hash_pw(passwort, salt)
+    sb_insert("partner", {
+        "name": name,
+        "pw_hash": pw_hash,
+        "salt": salt,
+        "stadt": stadt,
+        "angelegt": datetime.now().isoformat()
+    })
+    return jsonify({"success": True, "name": name})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

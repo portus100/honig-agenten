@@ -1247,9 +1247,39 @@ async function loescheV(id) {
 
 // INIT
 document.addEventListener('DOMContentLoaded', () => {
+  // Admin-Login prüfen
+  adminAuthCheck();
+});
+
+// ── ADMIN LOGIN ──
+let ADMIN_TOKEN = null;
+
+function adminAuthCheck() {
+  try { ADMIN_TOKEN = sessionStorage.getItem('admintoken'); } catch(e){}
+  if (ADMIN_TOKEN) {
+    fetch('/admin/me', {headers:{'Authorization':'Bearer '+ADMIN_TOKEN}})
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          adminZeigeDashboard();
+        } else {
+          ADMIN_TOKEN = null;
+          adminZeigeLogin();
+        }
+      }).catch(() => adminZeigeLogin());
+  } else {
+    adminZeigeLogin();
+  }
+}
+
+function adminZeigeLogin() {
+  document.getElementById('adminLoginOverlay').style.display = 'flex';
+}
+
+function adminZeigeDashboard() {
+  document.getElementById('adminLoginOverlay').style.display = 'none';
   buildCalendar();
   loadLeads('pending_approval', 'approvalsList');
-  // Load chat history
   fetch('/api/chat-history').then(r=>r.json()).then(data => {
     if (data.history) {
       data.history.forEach(m => {
@@ -1258,7 +1288,64 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
   }).catch(()=>{});
+}
+
+async function adminLogin() {
+  const name = document.getElementById('adminName').value.trim();
+  const pw = document.getElementById('adminPw').value;
+  if (!name || !pw) return;
+  const btn = document.getElementById('adminLoginBtn');
+  btn.disabled = true; btn.textContent = 'Anmelden…';
+  try {
+    const res = await fetch('/admin/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, passwort: pw})
+    });
+    const data = await res.json();
+    if (data.success) {
+      ADMIN_TOKEN = data.token;
+      try { sessionStorage.setItem('admintoken', ADMIN_TOKEN); } catch(e){}
+      adminZeigeDashboard();
+    } else {
+      document.getElementById('adminLoginErr').textContent = data.error || 'Fehler';
+    }
+  } catch(e) {
+    document.getElementById('adminLoginErr').textContent = 'Verbindungsfehler';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Anmelden';
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('adminLoginOverlay').style.display !== 'none') {
+    adminLogin();
+  }
 });
 </script>
+
+<!-- ADMIN LOGIN OVERLAY -->
+<div id="adminLoginOverlay" style="display:none;position:fixed;inset:0;background:#F5F0E8;z-index:9999;align-items:center;justify-content:center;">
+  <div style="width:100%;max-width:340px;padding:0 20px;">
+    <div style="text-align:center;margin-bottom:32px;">
+      <div style="font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:300;color:#0A0807;">🍯 Honigspirituosen</div>
+      <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#C8C0B0;margin-top:6px;">Agenten-Dashboard</div>
+    </div>
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8B6914;margin-bottom:5px;">Name</div>
+      <input id="adminName" type="text" autocomplete="username" placeholder="Benutzername"
+        style="width:100%;background:#EDE8DB;border:1px solid #D0C8B8;border-radius:4px;padding:10px 12px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#0A0807;outline:none;">
+    </div>
+    <div style="margin-bottom:20px;">
+      <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8B6914;margin-bottom:5px;">Passwort</div>
+      <input id="adminPw" type="password" autocomplete="current-password" placeholder="Passwort"
+        style="width:100%;background:#EDE8DB;border:1px solid #D0C8B8;border-radius:4px;padding:10px 12px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#0A0807;outline:none;">
+    </div>
+    <div id="adminLoginErr" style="color:#8B2020;font-size:12px;margin-bottom:10px;min-height:16px;text-align:center;"></div>
+    <button id="adminLoginBtn" onclick="adminLogin()"
+      style="width:100%;background:#0A0807;color:#F5F0E8;border:none;border-radius:4px;padding:11px;font-family:'JetBrains Mono',monospace;font-size:13px;cursor:pointer;">
+      Anmelden
+    </button>
+  </div>
+</div>
 </body>
 </html>
