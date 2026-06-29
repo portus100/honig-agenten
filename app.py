@@ -1841,7 +1841,7 @@ def admin_login():
     passwort = data.get("passwort") or ""
     if not name or not passwort:
         return jsonify({"success": False, "error": "Name und Passwort nötig"})
-    rows = sb_get("partner", f"select=*&name=eq.{name}&rolle=eq.admin")
+    rows = sb_get("partner", f"select=*&name=eq.{name}")
     if not rows or len(rows) == 0:
         return jsonify({"success": False, "error": "Login fehlgeschlagen"})
     p = rows[0]
