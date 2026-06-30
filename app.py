@@ -72,6 +72,20 @@ def sb_update(table, filter_str, data):
     except:
         return False
 
+def sb_delete(table, filter_str):
+    try:
+        r = requests.delete(
+            f"{SUPABASE_URL}/rest/v1/{table}?{filter_str}",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}"
+            },
+            timeout=10
+        )
+        return r.ok
+    except:
+        return False
+
 # ── CLAUDE (Analyse & Logik) ──
 def call_claude(system_prompt, user_message, history=None):
     if not ANTHROPIC_API_KEY:
@@ -323,11 +337,14 @@ def search_places(query, location, max_results=10):
                 continue
             seen.add(pid)
             details = get_place_details(pid) if pid else {}
+            geo = place.get("geometry", {}).get("location", {})
             results.append({
                 "name": place.get("name", ""),
                 "address": place.get("formatted_address", ""),
                 "rating": place.get("rating", 0),
                 "place_id": pid,
+                "lat": geo.get("lat"),
+                "lng": geo.get("lng"),
                 "website": details.get("website", ""),
                 "phone": details.get("phone", ""),
                 "opening_hours": details.get("opening_hours", [])
@@ -358,20 +375,195 @@ def analyze_website(url):
     except Exception as e:
         return {"score": 1, "signals": [], "contact_email": "", "contact_person": "", "error": str(e)}
 
-def calculate_appointments(available_days):
-    day_map = {"montag": 0, "dienstag": 1, "mittwoch": 2, "donnerstag": 3, "freitag": 4, "samstag": 5}
-    weekdays = [day_map[d.lower()] for d in available_days if d.lower() in day_map]
-    if not weekdays:
-        weekdays = [0, 1, 2, 3, 4]
-    
+def parse_opening_hours(weekday_text):
+    """Wandelt Google's weekday_text in {wochentag_index: [(open_min, close_min), ...]} um.
+    weekday_text z.B.: ['Montag: 17:00–02:00', 'Dienstag: Geschlossen', ...]"""
+    day_map = {"montag": 0, "dienstag": 1, "mittwoch": 2, "donnerstag": 3,
+               "freitag": 4, "samstag": 5, "sonntag": 6}
+    result = {}
+    for line in (weekday_text or []):
+        if ":" not in line:
+            continue
+        tag_teil, _, zeit_teil = line.partition(":")
+        tag_idx = day_map.get(tag_teil.strip().lower())
+        if tag_idx is None:
+            continue
+        zeit_teil = zeit_teil.strip()
+        if "geschlossen" in zeit_teil.lower() or "closed" in zeit_teil.lower():
+            result[tag_idx] = []
+            continue
+        spans = []
+        # Mehrere Zeitspannen mit Komma getrennt möglich
+        for span in zeit_teil.split(","):
+            # Verschiedene Bindestrich-Varianten normalisieren
+            s = span.replace("–", "-").replace("—", "-").strip()
+            if "-" not in s:
+                continue
+            a, _, b = s.partition("-")
+            try:
+                ah, am = [int(x) for x in a.strip().split(":")[:2]]
+                bh, bm = [int(x) for x in b.strip().split(":")[:2]]
+                open_min = ah * 60 + am
+                close_min = bh * 60 + bm
+                if close_min <= open_min:  # über Mitternacht
+                    close_min += 24 * 60
+                spans.append((open_min, close_min))
+            except (ValueError, IndexError):
+                continue
+        result[tag_idx] = spans
+    return result
+
+def ist_offen(opening_map, weekday_idx, hour, minute):
+    """Prüft ob an weekday_idx um hour:minute offen ist. Leere Map = unbekannt = erlauben."""
+    if not opening_map or weekday_idx not in opening_map:
+        return True  # keine Info -> nicht blockieren
+    t = hour * 60 + minute
+    for open_min, close_min in opening_map[weekday_idx]:
+        if open_min <= t <= close_min:
+            return True
+    return False
+
+def _overlap(a_start, a_end, b_start, b_end):
+    """Schnittmenge zweier Zeitintervalle (in Minuten). None wenn keine Überschneidung."""
+    s = max(a_start, b_start)
+    e = min(a_end, b_end)
+    return (s, e) if s < e else None
+
+def calculate_appointments(verfuegbarkeit, opening_hours=None, belegte_slots=None,
+                           wochen=3, termin_dauer=60, vorschlaege_pro_fenster=3):
+    """Erzeugt Terminvorschläge: Verfügbarkeitsfenster ∩ Öffnungszeiten, gleichmäßig verteilt.
+
+    - verfuegbarkeit: Liste von {datum:'YYYY-MM-DD', von:'HH:MM', bis:'HH:MM'}
+      (autonome Tagesfenster des Partners, mehrere pro Tag möglich)
+    - opening_hours: Google weekday_text des Leads (Termin nur wenn offen)
+    - belegte_slots: bereits vergebene 'YYYY-MM-DD HH:MM'
+    Fällt verfuegbarkeit leer aus, wird auf Mo–Fr Standardfenster zurückgegriffen.
+    """
+    opening_map = parse_opening_hours(opening_hours) if opening_hours else {}
+    belegt = set(belegte_slots or [])
+
+    def hhmm_to_min(s):
+        try:
+            h, m = [int(x) for x in s.split(":")[:2]]
+            return h * 60 + m
+        except Exception:
+            return None
+
+    # Rückwärtskompatibel: wenn eine Liste von Wochentags-NAMEN kommt
+    # (altes Haupt-Dashboard), in Standardfenster 11–19 für die nächsten 3 Wochen wandeln.
+    if verfuegbarkeit and isinstance(verfuegbarkeit[0], str):
+        day_map = {"montag": 0, "dienstag": 1, "mittwoch": 2, "donnerstag": 3,
+                   "freitag": 4, "samstag": 5, "sonntag": 6}
+        gewuenscht = set(day_map[d.lower()] for d in verfuegbarkeit if d.lower() in day_map)
+        umgewandelt = []
+        cur = datetime.now() + timedelta(days=1)
+        for _ in range(wochen * 7):
+            if cur.weekday() in gewuenscht:
+                umgewandelt.append({"datum": cur.strftime("%Y-%m-%d"), "von": "11:00", "bis": "19:00"})
+            cur += timedelta(days=1)
+        verfuegbarkeit = umgewandelt
+
+    # Fallback: keine Verfügbarkeit eingetragen -> Mo–Fr 11–19 Uhr für die nächsten 3 Wochen
+    if not verfuegbarkeit:
+        verfuegbarkeit = []
+        cur = datetime.now() + timedelta(days=1)
+        for _ in range(wochen * 7):
+            if cur.weekday() < 5:
+                verfuegbarkeit.append({
+                    "datum": cur.strftime("%Y-%m-%d"), "von": "11:00", "bis": "19:00"
+                })
+            cur += timedelta(days=1)
+
     slots = []
-    current = datetime.now() + timedelta(days=1)
-    while len(slots) < 15 and (current - datetime.now()).days < 28:
-        if current.weekday() in weekdays:
-            for hour, minute in [(11, 0), (13, 30), (16, 0)]:
-                slots.append(current.strftime(f"%A, %d.%m.%Y") + f" um {hour:02d}:{minute:02d} Uhr")
-        current += timedelta(days=1)
+    for fenster in verfuegbarkeit:
+        datum = fenster.get("datum", "")
+        von = hhmm_to_min(fenster.get("von", ""))
+        bis = hhmm_to_min(fenster.get("bis", ""))
+        if not datum or von is None or bis is None or bis <= von:
+            continue
+        try:
+            d = datetime.strptime(datum, "%Y-%m-%d")
+        except ValueError:
+            continue
+        wd = d.weekday()
+
+        # Öffnungszeiten dieses Wochentags
+        offen_spans = opening_map.get(wd, None)
+        # Keine Info -> ganzes Fenster gilt als offen
+        if offen_spans is None:
+            nutzbare = [(von, bis)]
+        elif len(offen_spans) == 0:
+            nutzbare = []  # geschlossen
+        else:
+            nutzbare = []
+            for (os_, oe_) in offen_spans:
+                ov = _overlap(von, bis, os_, oe_)
+                if ov:
+                    nutzbare.append(ov)
+
+        for (start, ende) in nutzbare:
+            spanne = ende - start
+            if spanne < termin_dauer:
+                continue
+            # Gleichmäßig verteilen: n Vorschläge im nutzbaren Fenster
+            n = min(vorschlaege_pro_fenster, max(1, spanne // termin_dauer))
+            if n == 1:
+                punkte = [start]
+            else:
+                schritt = (spanne - termin_dauer) / (n - 1) if n > 1 else 0
+                punkte = [int(start + i * schritt) for i in range(n)]
+            for p in punkte:
+                # auf 5 Minuten runden
+                p = int(round(p / 5) * 5)
+                hh, mm = divmod(p, 60)
+                key = f"{datum} {hh:02d}:{mm:02d}"
+                if key in belegt:
+                    continue
+                slots.append(d.strftime(f"%A, %d.%m.%Y") + f" um {hh:02d}:{mm:02d} Uhr")
+
     return slots[:15]
+
+import math
+
+def distanz_meter(lat1, lng1, lat2, lng2):
+    """Luftlinie zwischen zwei Punkten in Metern (Haversine). Gratis, ohne API."""
+    if None in (lat1, lng1, lat2, lng2):
+        return 999999
+    R = 6371000  # Erdradius in Metern
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lng2 - lng1)
+    a = math.sin(dphi/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlmb/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+def cluster_leads(leads, radius_m=800):
+    """Gruppiert Leads nach Nähe (Luftlinie). Greedy: nimm einen Lead, sammle alle
+    im Radius, bilde Cluster, weiter mit dem nächsten ungenutzten. Sortiert so, dass
+    dichte Cluster (viele nahe Leads) zuerst kommen."""
+    rest = [l for l in leads if l.get("lat") is not None and l.get("lng") is not None]
+    ohne_geo = [l for l in leads if l.get("lat") is None or l.get("lng") is None]
+    cluster = []
+    benutzt = set()
+    for i, l in enumerate(rest):
+        if i in benutzt:
+            continue
+        gruppe = [l]
+        benutzt.add(i)
+        for j, m in enumerate(rest):
+            if j in benutzt:
+                continue
+            if distanz_meter(l["lat"], l["lng"], m["lat"], m["lng"]) <= radius_m:
+                gruppe.append(m)
+                benutzt.add(j)
+        cluster.append(gruppe)
+    # Dichteste Cluster zuerst
+    cluster.sort(key=len, reverse=True)
+    # Flach zurückgeben: erst dichte Cluster, dann Geo-lose Leads ans Ende
+    sortiert = []
+    for g in cluster:
+        sortiert.extend(g)
+    sortiert.extend(ohne_geo)
+    return sortiert
 
 def write_email(business, analysis, appointments):
     contact = business.get("contact_person") or ""
@@ -1672,20 +1864,48 @@ def _scans_heute(partner_id):
     rows = sb_get("partner_scans", f"select=id&partner_id=eq.{partner_id}&tag=eq.{heute}")
     return len(rows) if rows else 0
 
+def _ist_admin(partner_id):
+    """Prüft ob der Account ein Admin ist (kein Limit)."""
+    rows = sb_get("partner", f"select=rolle&id=eq.{partner_id}")
+    return bool(rows) and rows[0].get("rolle") == "admin"
+
+def _offene_leads_ohne_termin(partner_id):
+    """Zählt Leads die noch keinen Termin haben und nicht abgelehnt sind."""
+    rows = sb_get("partner_leads",
+        f"select=id&partner_id=eq.{partner_id}&status=in.(neu,angeschrieben)")
+    return len(rows) if rows else 0
+
+def _belegte_slots(partner_id):
+    """Liste der vergebenen Slots im 3-Wochen-Fenster als 'YYYY-MM-DD HH:MM'."""
+    heute = datetime.now().strftime("%Y-%m-%d")
+    ende = (datetime.now() + timedelta(days=21)).strftime("%Y-%m-%d")
+    rows = sb_get("partner_termine",
+        f"select=datum,uhrzeit&partner_id=eq.{partner_id}"
+        f"&datum=gte.{heute}&datum=lte.{ende}&status=neq.abgesagt")
+    return [f"{r['datum']} {r['uhrzeit']}" for r in (rows or [])]
+
+# Grenze: solange so viele Leads offen sind, kein neuer Scan (Partner)
+OFFENE_LEADS_GRENZE = 20
+
 @app.route("/partner/scan", methods=["POST"])
 def partner_scan():
-    """Partner scannt Bars/Cocktailbars. Mit Tageslimit."""
+    """Partner scannt Bars/Cocktailbars. Limit über offene Leads, nicht pro Tag."""
     token = _token_aus_request()
     sess = partner_aus_token(token)
     if not sess:
         return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
 
     partner_id = sess["partner_id"]
+    admin = _ist_admin(partner_id)
 
-    # Tageslimit prüfen
-    genutzt = _scans_heute(partner_id)
-    if genutzt >= PARTNER_SCAN_LIMIT:
-        return jsonify({"success": False, "error": f"Tageslimit erreicht ({PARTNER_SCAN_LIMIT} Scans/Tag). Morgen wieder!"})
+    # Limit: Partner darf nicht nachladen, solange zu viele Leads unbearbeitet sind.
+    # Admin (Josef) hat kein Limit.
+    if not admin:
+        offen = _offene_leads_ohne_termin(partner_id)
+        if offen >= OFFENE_LEADS_GRENZE:
+            return jsonify({"success": False, "error":
+                f"Du hast noch {offen} offene Leads ohne Termin. "
+                f"Arbeite die erst ab (Termin oder abgelehnt), dann kannst du neu scannen."})
 
     data = request.json or {}
     # Feste Auswahl: nur Bar oder Cocktailbar
@@ -1713,18 +1933,40 @@ def partner_scan():
                 seen.add(pid)
                 all_places.append(p)
 
-    appointments = calculate_appointments(["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"])
+    # Verfügbarkeit des Partners aus der DB (Tagesfenster, 3-Wochen-Fenster)
+    heute = datetime.now().strftime("%Y-%m-%d")
+    ende = (datetime.now() + timedelta(days=21)).strftime("%Y-%m-%d")
+    verf_rows = sb_get("partner_verfuegbarkeit",
+        f"select=datum,von,bis&partner_id=eq.{partner_id}"
+        f"&datum=gte.{heute}&datum=lte.{ende}&order=datum.asc")
+    verfuegbarkeit = verf_rows or []
+
+    # Bereits belegte Slots im 3-Wochen-Fenster (einmal laden)
+    belegt = _belegte_slots(partner_id)
+
+    # Geo-Clustering: nahe Leads zuerst (kompakte Touren), 800m-Radius
+    all_places = cluster_leads(all_places, radius_m=800)
 
     qualified = []
     for place in all_places[:max_results]:
         analysis = analyze_website(place.get("website", ""))
         if analysis["score"] >= 1 or place.get("rating", 0) >= 4.0:
+            # Terminvorschläge: Verfügbarkeit ∩ Öffnungszeiten dieser Location + freie Slots
+            oeffnung = place.get("opening_hours", [])
+            appointments = calculate_appointments(
+                verfuegbarkeit,
+                opening_hours=oeffnung,
+                belegte_slots=belegt,
+                wochen=3
+            )
             email = write_email(place, analysis, appointments[:3])
             lead = {
                 "partner_id": partner_id,
                 "name": place["name"],
                 "address": place["address"],
                 "place_id": place.get("place_id", ""),
+                "lat": place.get("lat"),
+                "lng": place.get("lng"),
                 "website": place.get("website", ""),
                 "phone": place.get("phone", ""),
                 "contact_email": analysis.get("contact_email", ""),
@@ -1895,6 +2137,159 @@ def admin_anlegen():
         "angelegt": datetime.now().isoformat()
     })
     return jsonify({"success": True, "name": name})
+
+# ── TERMIN-KALENDER (Partner + Admin) ──
+
+def _termin_fenster_tage():
+    """3-Wochen-Fenster ab heute."""
+    return 21
+
+@app.route("/partner/verfuegbarkeit", methods=["GET"])
+def partner_verfuegbarkeit_liste():
+    """Verfügbarkeitsfenster des Partners im 3-Wochen-Fenster."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    heute = datetime.now().strftime("%Y-%m-%d")
+    ende = (datetime.now() + timedelta(days=21)).strftime("%Y-%m-%d")
+    rows = sb_get("partner_verfuegbarkeit",
+        f"select=*&partner_id=eq.{sess['partner_id']}"
+        f"&datum=gte.{heute}&datum=lte.{ende}&order=datum.asc,von.asc")
+    return jsonify({"success": True, "fenster": rows or []})
+
+@app.route("/partner/verfuegbarkeit/anlegen", methods=["POST"])
+def partner_verfuegbarkeit_anlegen():
+    """Partner trägt ein Zeitfenster für einen Tag ein (mehrere pro Tag möglich)."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    data = request.json or {}
+    datum = (data.get("datum") or "").strip()
+    von = (data.get("von") or "").strip()
+    bis = (data.get("bis") or "").strip()
+    if not datum or not von or not bis:
+        return jsonify({"success": False, "error": "Datum, von und bis nötig"})
+    if bis <= von:
+        return jsonify({"success": False, "error": "'bis' muss nach 'von' liegen"})
+    sb_insert("partner_verfuegbarkeit", {
+        "partner_id": sess["partner_id"],
+        "datum": datum, "von": von, "bis": bis,
+        "created_at": datetime.now().isoformat()
+    })
+    return jsonify({"success": True})
+
+@app.route("/partner/verfuegbarkeit/loeschen", methods=["POST"])
+def partner_verfuegbarkeit_loeschen():
+    """Ein Zeitfenster wieder entfernen."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    data = request.json or {}
+    fid = data.get("id")
+    if not fid:
+        return jsonify({"success": False, "error": "Keine ID"})
+    rows = sb_get("partner_verfuegbarkeit", f"select=partner_id&id=eq.{fid}")
+    if not rows or rows[0].get("partner_id") != sess["partner_id"]:
+        return jsonify({"success": False, "error": "Nicht erlaubt"}), 403
+    sb_delete("partner_verfuegbarkeit", f"id=eq.{fid}")
+    return jsonify({"success": True})
+
+@app.route("/partner/termine", methods=["GET"])
+def partner_termine_liste():
+    """Alle Termine des eingeloggten Partners im 3-Wochen-Fenster."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    heute = datetime.now().strftime("%Y-%m-%d")
+    ende = (datetime.now() + timedelta(days=_termin_fenster_tage())).strftime("%Y-%m-%d")
+    rows = sb_get("partner_termine",
+        f"select=*&partner_id=eq.{sess['partner_id']}"
+        f"&datum=gte.{heute}&datum=lte.{ende}"
+        f"&order=datum.asc,uhrzeit.asc")
+    return jsonify({"success": True, "termine": rows or []})
+
+@app.route("/partner/termin/anlegen", methods=["POST"])
+def partner_termin_anlegen():
+    """Partner trägt einen Termin ein (nach dem Anruf)."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    data = request.json or {}
+    datum = (data.get("datum") or "").strip()
+    uhrzeit = (data.get("uhrzeit") or "").strip()
+    if not datum or not uhrzeit:
+        return jsonify({"success": False, "error": "Datum und Uhrzeit nötig"})
+    # Slot schon belegt?
+    bestehend = sb_get("partner_termine",
+        f"select=id&partner_id=eq.{sess['partner_id']}"
+        f"&datum=eq.{datum}&uhrzeit=eq.{uhrzeit}&status=neq.abgesagt")
+    if bestehend and len(bestehend) > 0:
+        return jsonify({"success": False, "error": "Slot bereits belegt"})
+    termin = {
+        "partner_id": sess["partner_id"],
+        "lead_id": data.get("lead_id"),
+        "lead_name": data.get("lead_name", ""),
+        "datum": datum,
+        "uhrzeit": uhrzeit,
+        "status": "geplant",
+        "notiz": data.get("notiz", ""),
+        "created_at": datetime.now().isoformat()
+    }
+    sb_insert("partner_termine", termin)
+    # Wenn aus einem Lead: Lead-Status auf 'termin' setzen
+    if data.get("lead_id"):
+        sb_update("partner_leads", f"id=eq.{data.get('lead_id')}", {"status": "termin"})
+    return jsonify({"success": True})
+
+@app.route("/partner/termin/status", methods=["POST"])
+def partner_termin_status():
+    """Termin auf erledigt/abgesagt setzen."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    data = request.json or {}
+    tid = data.get("id")
+    status = data.get("status", "")
+    if not tid or status not in ("geplant", "erledigt", "abgesagt"):
+        return jsonify({"success": False, "error": "Ungültig"})
+    rows = sb_get("partner_termine", f"select=partner_id&id=eq.{tid}")
+    if not rows or rows[0].get("partner_id") != sess["partner_id"]:
+        return jsonify({"success": False, "error": "Nicht erlaubt"}), 403
+    sb_update("partner_termine", f"id=eq.{tid}", {"status": status})
+    return jsonify({"success": True})
+
+@app.route("/partner/passwort", methods=["POST"])
+def partner_passwort_aendern():
+    """Partner ändert sein eigenes Passwort."""
+    token = _token_aus_request()
+    sess = partner_aus_token(token)
+    if not sess:
+        return jsonify({"success": False, "error": "Nicht eingeloggt"}), 401
+    data = request.json or {}
+    alt = data.get("alt") or ""
+    neu = data.get("neu") or ""
+    if len(neu) < 6:
+        return jsonify({"success": False, "error": "Neues Passwort min. 6 Zeichen"})
+    rows = sb_get("partner", f"select=*&id=eq.{sess['partner_id']}")
+    if not rows:
+        return jsonify({"success": False, "error": "Nicht gefunden"})
+    p = rows[0]
+    if _hash_pw(alt, p.get("salt", "")) != p.get("pw_hash", ""):
+        return jsonify({"success": False, "error": "Altes Passwort falsch"})
+    neuer_salt = _secrets.token_hex(16)
+    neuer_hash = _hash_pw(neu, neuer_salt)
+    sb_update("partner", f"id=eq.{sess['partner_id']}", {"pw_hash": neuer_hash, "salt": neuer_salt})
+    return jsonify({"success": True})
+
+@app.route("/partner/seite", methods=["GET"])
+def partner_seite_alias():
+    return send_file("partner.html")
 
 @app.route("/partner", methods=["GET"])
 def partner_seite():

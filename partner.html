@@ -85,6 +85,10 @@
   .toast.on { opacity:1; }
   .hidden { display:none; }
   .spinner { text-align:center; padding:20px; color:var(--amber); font-size:14px; }
+  .ptab { flex:1; background:transparent; border:none; padding:10px 4px; font-size:13px; color:#8B6914; cursor:pointer; border-bottom:2px solid transparent; }
+  .ptab-active { color:var(--ink); font-weight:700; border-bottom-color:var(--gold); }
+  .tagchip { display:inline-flex; align-items:center; gap:4px; background:#EDE8DB; border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; cursor:pointer; }
+  .termin-item { background:#EDE8DB; border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; }
 </style>
 </head>
 <body>
@@ -116,7 +120,17 @@
       </div>
     </div>
 
-    <div class="limit-info" id="limitInfo">Scans heute: – / –</div>
+    <div class="limit-info hidden" id="limitInfo"></div>
+
+    <!-- TAB-NAVIGATION -->
+    <div style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #D0C8B8">
+      <button class="ptab ptab-active" id="tab-scan" onclick="zeigeTab('scan')">🔍 Leads</button>
+      <button class="ptab" id="tab-kalender" onclick="zeigeTab('kalender')">📅 Kalender</button>
+      <button class="ptab" id="tab-einstellungen" onclick="zeigeTab('einstellungen')">⚙️ Konto</button>
+    </div>
+
+    <!-- ===== TAB: LEADS ===== -->
+    <div id="view-scan">
 
     <div class="card">
       <label>Was suchen</label>
@@ -151,12 +165,61 @@
         <option value="1220 Wien">22. – Donaustadt</option>
         <option value="1230 Wien">23. – Liesing</option>
       </select>
+
+      <div style="font-size:12px;color:#8B6914;margin:10px 0">💡 Termine richten sich nach deinen Zeitfenstern im Kalender-Tab und den Öffnungszeiten der Bars.</div>
+
       <button class="btn btn-gold" onclick="scan()" id="scanBtn">🔍 Suchen</button>
     </div>
 
     <div id="scanSpinner" class="spinner hidden">Suche läuft, einen Moment…</div>
 
     <div id="leadsList"></div>
+
+    </div><!-- /view-scan -->
+
+    <!-- ===== TAB: KALENDER ===== -->
+    <div id="view-kalender" class="hidden">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:4px">Wann hast du Zeit?</div>
+        <div style="font-size:12px;color:#8B6914;margin-bottom:12px">Trag deine Zeitfenster ein — pro Tag auch mehrere möglich (z.B. 10–14 und 15–23 Uhr). Das System schlägt Termine nur in diesen Zeiten vor, abgestimmt auf die Öffnungszeiten der Bars.</div>
+        <label>Tag</label>
+        <input type="date" id="vDatum">
+        <div style="display:flex;gap:8px">
+          <div style="flex:1"><label>Von</label><input type="time" id="vVon"></div>
+          <div style="flex:1"><label>Bis</label><input type="time" id="vBis"></div>
+        </div>
+        <button class="btn btn-gold" onclick="verfuegbarkeitAnlegen()" style="margin-top:10px">Zeitfenster hinzufügen</button>
+        <div id="verfuegbarkeitListe" style="margin-top:14px"></div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:4px">Deine Termine — nächste 3 Wochen</div>
+        <div style="font-size:12px;color:#8B6914;margin-bottom:12px">Trage hier ein, was du beim Anruf vereinbart hast.</div>
+        <div id="kalenderListe"></div>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:10px">Neuen Termin eintragen</div>
+        <label>Bar / Lead</label>
+        <input type="text" id="tNeuName" placeholder="Name der Bar">
+        <label>Datum</label>
+        <input type="date" id="tNeuDatum">
+        <label>Uhrzeit</label>
+        <input type="time" id="tNeuZeit">
+        <button class="btn btn-gold" onclick="terminAnlegen()" style="margin-top:10px">Termin speichern</button>
+      </div>
+    </div>
+
+    <!-- ===== TAB: KONTO ===== -->
+    <div id="view-einstellungen" class="hidden">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:10px">Passwort ändern</div>
+        <label>Altes Passwort</label>
+        <input type="password" id="pwAlt" autocomplete="current-password">
+        <label>Neues Passwort (min. 6 Zeichen)</label>
+        <input type="password" id="pwNeu" autocomplete="new-password">
+        <button class="btn btn-gold" onclick="passwortAendern()" style="margin-top:10px">Passwort ändern</button>
+      </div>
+    </div>
 
     <div style="text-align:center; margin-top:20px">
       <button class="btn btn-ghost btn-sm" onclick="logout()">Abmelden</button>
@@ -213,6 +276,163 @@ function logout() {
   try { sessionStorage.removeItem('ptoken'); } catch(e){}
   document.getElementById('appView').classList.add('hidden');
   document.getElementById('loginView').classList.remove('hidden');
+}
+
+// ── TABS ──
+function terminAusLead(leadId, leadName) {
+  zeigeTab('kalender');
+  document.getElementById('tNeuName').value = leadName || '';
+  window._aktuellerLeadId = leadId;
+  document.getElementById('tNeuDatum').focus();
+}
+
+function zeigeTab(name) {
+  ['scan','kalender','einstellungen'].forEach(t => {
+    document.getElementById('view-'+t).classList.toggle('hidden', t !== name);
+    document.getElementById('tab-'+t).classList.toggle('ptab-active', t === name);
+  });
+  if (name === 'kalender') { ladeTermine(); ladeVerfuegbarkeit(); }
+}
+
+// ── VERFÜGBARKEIT ──
+async function ladeVerfuegbarkeit() {
+  try {
+    const res = await fetch('/partner/verfuegbarkeit', {headers:{'Authorization':'Bearer '+TOKEN}});
+    const data = await res.json();
+    const box = document.getElementById('verfuegbarkeitListe');
+    if (!data.success || !data.fenster || data.fenster.length === 0) {
+      box.innerHTML = '<div style="color:#8B6914;font-size:13px">Noch keine Zeitfenster eingetragen.</div>';
+      return;
+    }
+    box.innerHTML = data.fenster.map(f => {
+      const d = new Date(f.datum + 'T00:00');
+      const wt = d.toLocaleDateString('de-AT', {weekday:'short', day:'2-digit', month:'2-digit'});
+      return `<div class="termin-item" style="display:flex;justify-content:space-between;align-items:center">
+        <span>${wt}: <strong>${f.von}–${f.bis} Uhr</strong></span>
+        <button class="btn btn-ghost btn-sm" onclick="verfuegbarkeitLoeschen(${f.id})">✕</button>
+      </div>`;
+    }).join('');
+  } catch(e) {}
+}
+
+async function verfuegbarkeitAnlegen() {
+  const datum = document.getElementById('vDatum').value;
+  const von = document.getElementById('vVon').value;
+  const bis = document.getElementById('vBis').value;
+  if (!datum || !von || !bis) { showToast('Tag, von und bis ausfüllen'); return; }
+  try {
+    const res = await fetch('/partner/verfuegbarkeit/anlegen', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({datum, von, bis})
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Zeitfenster hinzugefügt');
+      document.getElementById('vVon').value='';
+      document.getElementById('vBis').value='';
+      ladeVerfuegbarkeit();
+    } else { showToast(data.error || 'Fehler'); }
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+async function verfuegbarkeitLoeschen(id) {
+  try {
+    const res = await fetch('/partner/verfuegbarkeit/loeschen', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({id})
+    });
+    const data = await res.json();
+    if (data.success) { showToast('Entfernt'); ladeVerfuegbarkeit(); }
+  } catch(e) {}
+}
+
+// ── KALENDER ──
+async function ladeTermine() {
+  try {
+    const res = await fetch('/partner/termine', {headers:{'Authorization':'Bearer '+TOKEN}});
+    const data = await res.json();
+    const box = document.getElementById('kalenderListe');
+    if (!data.success || !data.termine || data.termine.length === 0) {
+      box.innerHTML = '<div style="color:#8B6914;font-size:13px">Noch keine Termine eingetragen.</div>';
+      return;
+    }
+    box.innerHTML = data.termine.map(t => {
+      const d = new Date(t.datum + 'T' + (t.uhrzeit||'00:00'));
+      const wt = d.toLocaleDateString('de-AT', {weekday:'short', day:'2-digit', month:'2-digit'});
+      const erledigt = t.status === 'erledigt';
+      const abgesagt = t.status === 'abgesagt';
+      return `<div class="termin-item" style="${abgesagt?'opacity:.5;text-decoration:line-through':''}">
+        <div style="font-weight:700">${t.lead_name || 'Termin'}</div>
+        <div style="font-size:13px;color:#8B6914">${wt} um ${t.uhrzeit} Uhr</div>
+        ${!abgesagt ? `<div style="margin-top:6px;display:flex;gap:6px">
+          ${!erledigt ? `<button class="btn btn-ghost btn-sm" onclick="terminStatus(${t.id},'erledigt')">✓ Erledigt</button>` : '<span style="font-size:12px;color:#2E7D32">✓ erledigt</span>'}
+          <button class="btn btn-ghost btn-sm" onclick="terminStatus(${t.id},'abgesagt')">Absagen</button>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {}
+}
+
+async function terminAnlegen() {
+  const name = document.getElementById('tNeuName').value.trim();
+  const datum = document.getElementById('tNeuDatum').value;
+  const zeit = document.getElementById('tNeuZeit').value;
+  if (!datum || !zeit) { showToast('Datum und Uhrzeit nötig'); return; }
+  try {
+    const res = await fetch('/partner/termin/anlegen', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({lead_name: name, lead_id: window._aktuellerLeadId || null, datum, uhrzeit: zeit})
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Termin gespeichert');
+      window._aktuellerLeadId = null;
+      document.getElementById('tNeuName').value='';
+      document.getElementById('tNeuDatum').value='';
+      document.getElementById('tNeuZeit').value='';
+      ladeTermine();
+    } else {
+      showToast(data.error || 'Fehler');
+    }
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+async function terminStatus(id, status) {
+  try {
+    const res = await fetch('/partner/termin/status', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({id, status})
+    });
+    const data = await res.json();
+    if (data.success) { showToast('Aktualisiert'); ladeTermine(); }
+    else showToast(data.error || 'Fehler');
+  } catch(e) {}
+}
+
+// ── PASSWORT ──
+async function passwortAendern() {
+  const alt = document.getElementById('pwAlt').value;
+  const neu = document.getElementById('pwNeu').value;
+  if (!alt || !neu) { showToast('Beide Felder ausfüllen'); return; }
+  try {
+    const res = await fetch('/partner/passwort', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+      body: JSON.stringify({alt, neu})
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Passwort geändert');
+      document.getElementById('pwAlt').value='';
+      document.getElementById('pwNeu').value='';
+    } else {
+      showToast(data.error || 'Fehler');
+    }
+  } catch(e) { showToast('Fehler: '+e.message); }
 }
 
 function zeigeApp() {
@@ -311,7 +531,7 @@ function renderLeads(leads) {
         ${notiz}
         <div class="status-btns">
           <button class="btn btn-ghost" onclick="setStatus(${l.id},'angeschrieben')">Angeschrieben</button>
-          <button class="btn btn-ghost" onclick="setStatus(${l.id},'termin')">Termin</button>
+          <button class="btn btn-ghost" onclick="terminAusLead(${l.id}, ${JSON.stringify(l.name)})">📅 Termin</button>
           <button class="btn btn-ghost" onclick="setStatus(${l.id},'gekauft')">Gekauft</button>
           <button class="btn btn-ghost" onclick="setStatus(${l.id},'abgelehnt')">Abgelehnt</button>
           <button class="btn btn-ghost" onclick="addNotiz(${l.id})">📝 Notiz</button>
