@@ -760,16 +760,16 @@ TEXT:
         kategorie = fixe_zielgruppe or (f.get("kategorie") or "Sonstige").strip()
         if kategorie not in kategorien and kategorie != "Sonstige":
             kategorie = "Sonstige"
-        website = f.get("website", "")
-        analysis = analyze_website(website) if website else {"contact_email": "", "contact_person": ""}
+        # KEIN Website-Scan hier (zu langsam bei Masse) — nur WKO-Daten übernehmen.
+        # Der Ansprechpartner-Scan passiert später bei der Mail-Generierung.
         lead = {
             "name": name,
             "address": f.get("address", ""),
             "place_id": "",
-            "website": website,
+            "website": f.get("website", ""),
             "phone": f.get("phone", ""),
-            "contact_email": f.get("contact_email") or analysis.get("contact_email", ""),
-            "contact_person": f.get("contact_person") or analysis.get("contact_person", ""),
+            "contact_email": f.get("contact_email", ""),
+            "contact_person": f.get("contact_person", ""),
             "zielgruppe": kategorie,
             "bezirk": (f.get("bezirk") or "").strip() or bezirk,
             "rating": 0,
@@ -798,10 +798,21 @@ def geschenk_leads_liste():
 
 @app.route("/geschenk/mails-generieren", methods=["POST"])
 def geschenk_mails_generieren():
-    """Erzeugt für alle Entwurfs-Leads (ohne Text) individuelle Mails via GPT."""
+    """Erzeugt für Entwurfs-Leads individuelle Mails. Scannt dabei die Website
+    nach Ansprechpartner (nur hier, nicht beim Massen-Import)."""
     rows = sb_get("geschenk_leads", "select=*&email_draft=eq.&order=created_at.asc") or []
     erzeugt = 0
-    for lead in rows[:40]:  # Batch, um Timeouts zu vermeiden
+    for lead in rows[:15]:  # kleinerer Batch, da jetzt Website-Scan dazukommt
+        # Ansprechpartner/E-Mail von Website holen, falls noch nicht vorhanden
+        if lead.get("website") and not lead.get("contact_person"):
+            analysis = analyze_website(lead["website"])
+            neu_person = analysis.get("contact_person", "")
+            neu_mail = lead.get("contact_email") or analysis.get("contact_email", "")
+            if neu_person or neu_mail:
+                sb_update("geschenk_leads", f"id=eq.{lead['id']}",
+                          {"contact_person": neu_person, "contact_email": neu_mail})
+                lead["contact_person"] = neu_person
+                lead["contact_email"] = neu_mail
         roh = write_gift_email(lead, lead.get("zielgruppe", ""))
         betreff, text = "", roh
         if "BETREFF:" in roh and "---" in roh:
