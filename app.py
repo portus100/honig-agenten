@@ -703,6 +703,15 @@ def geschenk_import():
     if len(roh) < 20:
         return jsonify({"success": False, "error": "Zu wenig Text"})
 
+    # Nur WKO- und Maps-Links entfernen — echte Firmen-Websites bleiben erhalten.
+    import re as _re
+    text = roh
+    text = _re.sub(r'\[([^\]]*)\]\((?:tel:|mailto:)?[^)]*\)', r'\1', text)     # Markdown-Links -> Text
+    text = _re.sub(r'https?://(?:firmen\.wko\.at|maps\.google\.com)\S+', '', text)  # nur WKO/Maps-URLs
+    text = _re.sub(r'Route planen', '', text)
+    text = _re.sub(r'\n{2,}', '\n', text)
+    roh = text.strip()
+
     kategorien = list(B2B_GESCHENK_ZIELGRUPPEN.keys())
     kat_liste = ", ".join(kategorien)
     prompt = f"""Aus dem folgenden Text eines Firmenverzeichnisses (WKO Firmen A-Z) extrahiere ALLE Firmen.
@@ -719,7 +728,7 @@ Gib NUR ein JSON-Array zurück, kein anderer Text. Format je Firma:
 - Fehlende Felder als leerer String. Keine erfundenen Daten.
 
 TEXT:
-{roh[:6000]}"""
+{roh[:12000]}"""
     antwort = call_gpt4(prompt)
     firmen = []
     try:
