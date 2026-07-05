@@ -158,7 +158,7 @@ def call_claude_websearch(system_prompt, user_message, max_searches=5):
         return f"Claude Websearch Fehler: {str(e)}"
 
 # ── GPT-4o (E-Mail schreiben) ──
-def call_gpt4(prompt):
+def call_gpt4(prompt, max_tokens=400):
     if not OPENAI_API_KEY:
         return "OPENAI_API_KEY fehlt"
     try:
@@ -169,9 +169,9 @@ def call_gpt4(prompt):
                 "model": "gpt-4o",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
-                "max_tokens": 400
+                "max_tokens": max_tokens
             },
-            timeout=15
+            timeout=30
         )
         data = r.json()
         return data["choices"][0]["message"]["content"]
@@ -729,14 +729,23 @@ Gib NUR ein JSON-Array zurück, kein anderer Text. Format je Firma:
 
 TEXT:
 {roh[:12000]}"""
-    antwort = call_gpt4(prompt)
+    antwort = call_gpt4(prompt, max_tokens=4000)
     firmen = []
     try:
         s = antwort.find("["); e = antwort.rfind("]")
         if s >= 0 and e > s:
             firmen = json.loads(antwort[s:e+1])
     except Exception:
-        return jsonify({"success": False, "error": "Konnte Text nicht zerlegen, bitte erneut versuchen"})
+        try:
+            for m in _re.finditer(r'\{[^{}]*\}', antwort):
+                try:
+                    firmen.append(json.loads(m.group(0)))
+                except Exception:
+                    pass
+        except Exception:
+            firmen = []
+    if not firmen:
+        return jsonify({"success": False, "error": "Konnte Text nicht zerlegen — bitte kleinere Portion einfuegen"})
 
     bestehend = set()
     for row in (sb_get("geschenk_leads", "select=name") or []):
@@ -887,7 +896,7 @@ Fehlende Felder als leerer String. Keine erfundenen Daten.
 
 TEXT:
 {roh[:6000]}"""
-    antwort = call_gpt4(prompt)
+    antwort = call_gpt4(prompt, max_tokens=4000)
     firmen = []
     try:
         s = antwort.find("["); e = antwort.rfind("]")
