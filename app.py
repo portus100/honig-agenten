@@ -747,15 +747,26 @@ TEXT:
     if not firmen:
         return jsonify({"success": False, "error": "Konnte Text nicht zerlegen — bitte kleinere Portion einfuegen"})
 
-    bestehend = set()
-    for row in (sb_get("geschenk_leads", "select=name") or []):
-        bestehend.add((row.get("name") or "").lower())
+    bestehend_namen = set()
+    bestehend_adressen = set()
+    for row in (sb_get("geschenk_leads", "select=name,address") or []):
+        bestehend_namen.add((row.get("name") or "").lower())
+        adr = (row.get("address") or "").lower().replace(" ", "")
+        if adr:
+            bestehend_adressen.add(adr)
 
     neu = 0
     pro_kategorie = {}
+    gesehen_adressen = set()  # innerhalb dieses Imports
     for f in firmen:
         name = (f.get("name") or "").strip()
-        if not name or name.lower() in bestehend:
+        if not name:
+            continue
+        adr_key = (f.get("address") or "").lower().replace(" ", "")
+        # Dublette: gleicher Name ODER gleiche Adresse (fängt Firmen mit vielen Gewerbescheinen)
+        if name.lower() in bestehend_namen:
+            continue
+        if adr_key and (adr_key in bestehend_adressen or adr_key in gesehen_adressen):
             continue
         kategorie = fixe_zielgruppe or (f.get("kategorie") or "Sonstige").strip()
         if kategorie not in kategorien and kategorie != "Sonstige":
@@ -779,7 +790,9 @@ TEXT:
             "created_at": datetime.now().isoformat()
         }
         sb_insert("geschenk_leads", lead)
-        bestehend.add(name.lower())
+        bestehend_namen.add(name.lower())
+        if adr_key:
+            gesehen_adressen.add(adr_key)
         pro_kategorie[kategorie] = pro_kategorie.get(kategorie, 0) + 1
         neu += 1
     return jsonify({"success": True, "erkannt": len(firmen), "neu": neu, "pro_kategorie": pro_kategorie})
