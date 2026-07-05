@@ -534,7 +534,22 @@
       <div id="geschenkStats" style="font-size:12px;color:var(--smoke);margin-bottom:12px"></div>
       <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
         <select class="ctrl-select" id="filterZG" onchange="ladeGeschenkLeads()" style="flex:1;min-width:140px"><option value="">Alle Zielgruppen</option></select>
-        <select class="ctrl-select" id="filterStatus" onchange="ladeGeschenkLeads()" style="flex:1;min-width:120px">
+        <select class="ctrl-select" id="filterBezirk" onchange="ladeGeschenkLeads()" style="flex:1;min-width:110px">
+          <option value="">Alle Bezirke</option>
+          <option value="1010 Wien">1010</option><option value="1020 Wien">1020</option>
+          <option value="1030 Wien">1030</option><option value="1040 Wien">1040</option>
+          <option value="1050 Wien">1050</option><option value="1060 Wien">1060</option>
+          <option value="1070 Wien">1070</option><option value="1080 Wien">1080</option>
+          <option value="1090 Wien">1090</option><option value="1100 Wien">1100</option>
+          <option value="1110 Wien">1110</option><option value="1120 Wien">1120</option>
+          <option value="1130 Wien">1130</option><option value="1140 Wien">1140</option>
+          <option value="1150 Wien">1150</option><option value="1160 Wien">1160</option>
+          <option value="1170 Wien">1170</option><option value="1180 Wien">1180</option>
+          <option value="1190 Wien">1190</option><option value="1200 Wien">1200</option>
+          <option value="1210 Wien">1210</option><option value="1220 Wien">1220</option>
+          <option value="1230 Wien">1230</option>
+        </select>
+        <select class="ctrl-select" id="filterStatus" onchange="ladeGeschenkLeads()" style="flex:1;min-width:110px">
           <option value="">Alle Status</option>
           <option value="entwurf">Entwurf</option>
           <option value="freigegeben">Freigegeben</option>
@@ -690,9 +705,11 @@ function leadAlter(iso) {
 async function ladeGeschenkLeads() {  try {
     const zg = document.getElementById('filterZG')?.value || '';
     const st = document.getElementById('filterStatus')?.value || '';
+    const bz = document.getElementById('filterBezirk')?.value || '';
     const qs = new URLSearchParams();
     if (zg) qs.set('zielgruppe', zg);
     if (st) qs.set('status', st);
+    if (bz) qs.set('bezirk', bz);
     const res = await fetch('/geschenk/leads?' + qs.toString());
     const data = await res.json();
     const leads = data.leads || [];

@@ -709,8 +709,12 @@ def geschenk_import():
 Ordne jede Firma EINER dieser Kategorien zu (nutze exakt diese Schreibweise):
 {kat_liste}, Sonstige
 
+Bestimme außerdem den Wiener Bezirk aus der Postleitzahl in der Adresse:
+- Wiener PLZ haben das Format 1XX0, wobei XX der Bezirk ist (z.B. 1010=1010 Wien, 1090=1090 Wien, 1230=1230 Wien).
+- Schreibe ins Feld "bezirk" z.B. "1090 Wien". Ist keine Wiener PLZ erkennbar, schreibe den Ort oder leer.
+
 Gib NUR ein JSON-Array zurück, kein anderer Text. Format je Firma:
-{{"name":"", "address":"", "phone":"", "website":"", "contact_email":"", "contact_person":"", "kategorie":""}}
+{{"name":"", "address":"", "phone":"", "website":"", "contact_email":"", "contact_person":"", "kategorie":"", "bezirk":""}}
 - "kategorie" = eine der oben genannten. Passt keine, nimm "Sonstige".
 - Fehlende Felder als leerer String. Keine erfundenen Daten.
 
@@ -749,7 +753,7 @@ TEXT:
             "contact_email": f.get("contact_email") or analysis.get("contact_email", ""),
             "contact_person": f.get("contact_person") or analysis.get("contact_person", ""),
             "zielgruppe": kategorie,
-            "bezirk": bezirk,
+            "bezirk": (f.get("bezirk") or "").strip() or bezirk,
             "rating": 0,
             "email_betreff": "",
             "email_draft": "",
