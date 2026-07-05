@@ -496,8 +496,9 @@
       <div class="controls" style="margin-bottom:14px">
         <div class="ctrl-label" style="margin-bottom:6px">📋 WKO-Liste einfügen (Text von firmen.wko.at kopieren)</div>
         <textarea class="ctrl-select" id="wkoText" rows="4" placeholder="Kopierten Text hier einfügen…" style="width:100%;resize:vertical;font-family:inherit"></textarea>
-        <div style="display:flex;gap:6px;margin-top:6px">
-          <input type="text" class="ctrl-select" id="wkoZielgruppe" placeholder="Zielgruppe (z.B. Vermögensberatung)" style="flex:1">
+        <div style="font-size:11px;color:var(--smoke);margin:6px 0">Die Branche wird automatisch erkannt und zugeordnet — Feld leer lassen. Nur ausfüllen, wenn du alle einer festen Zielgruppe zuordnen willst.</div>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <input type="text" class="ctrl-select" id="wkoZielgruppe" placeholder="(optional) feste Zielgruppe" style="flex:1">
           <button class="btn btn-dark btn-sm" onclick="wkoImport()" id="wkoBtn">Einlesen</button>
         </div>
       </div>
@@ -597,7 +598,7 @@ function toggleZG(el) {
 
 async function wkoImport() {
   const text = document.getElementById('wkoText').value.trim();
-  const zg = document.getElementById('wkoZielgruppe').value.trim() || 'WKO-Import';
+  const zg = document.getElementById('wkoZielgruppe').value.trim();
   if (text.length < 20) { showToast('Bitte Text einfügen'); return; }
   const btn = document.getElementById('wkoBtn');
   btn.disabled = true; btn.textContent = 'Liest…';
@@ -608,7 +609,11 @@ async function wkoImport() {
     });
     const data = await res.json();
     if (data.success) {
-      showToast(`${data.erkannt} erkannt, ${data.neu} neu übernommen`);
+      let msg = `${data.erkannt} erkannt, ${data.neu} neu`;
+      if (data.pro_kategorie && Object.keys(data.pro_kategorie).length) {
+        msg += ' — ' + Object.entries(data.pro_kategorie).map(([k,v]) => `${k}: ${v}`).join(', ');
+      }
+      showToast(msg);
       document.getElementById('wkoText').value = '';
       ladeGeschenkLeads();
     } else showToast(data.error || 'Fehler');
@@ -670,8 +675,19 @@ async function geschenkSenden() {
   finally { btn.disabled = false; btn.textContent = '📤 Sammelversand'; }
 }
 
-async function ladeGeschenkLeads() {
+function leadAlter(iso) {
   try {
+    const tage = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if (tage <= 0) return 'heute';
+    if (tage === 1) return 'gestern';
+    if (tage < 30) return `vor ${tage} Tagen`;
+    const monate = Math.floor(tage/30);
+    const alt = monate >= 12 ? '⚠️ ' : '';
+    return `${alt}vor ${monate} Mon.`;
+  } catch(e) { return ''; }
+}
+
+async function ladeGeschenkLeads() {  try {
     const zg = document.getElementById('filterZG')?.value || '';
     const st = document.getElementById('filterStatus')?.value || '';
     const qs = new URLSearchParams();
@@ -705,6 +721,7 @@ async function ladeGeschenkLeads() {
           </div>
           <div style="font-size:12px;color:var(--smoke);margin-top:4px">
             ${l.contact_person ? '👤 '+l.contact_person+' · ' : ''}${l.contact_email || 'keine E-Mail'}${l.phone ? ' · '+l.phone : ''}
+            ${l.created_at ? ' · <span style="opacity:.7">'+leadAlter(l.created_at)+'</span>' : ''}
           </div>
           ${l.email_draft ? `<div style="margin-top:8px;font-size:12px;background:var(--paper);border:1px solid var(--border);border-radius:6px;padding:8px;white-space:pre-wrap;max-height:120px;overflow:auto"><strong>${l.email_betreff||''}</strong>\n${l.email_draft}</div>` : ''}
         </div>`;

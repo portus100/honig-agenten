@@ -693,42 +693,51 @@ def geschenk_scan():
 
 @app.route("/geschenk/import", methods=["POST"])
 def geschenk_import():
-    """Nimmt kopierten WKO-Text, zerlegt ihn via GPT in Firmen, speichert als Leads."""
+    """Nimmt kopierten WKO-Text, zerlegt via GPT in Firmen UND erkennt je Firma die Branche.
+    Ordnet automatisch der passenden Zielgruppe zu. Keine Vorab-Auswahl nötig."""
     data = request.json or {}
     roh = (data.get("text") or "").strip()
-    zielgruppe = data.get("zielgruppe", "WKO-Import")
     bezirk = data.get("bezirk", "Wien")
+    # Optionale manuelle Vorgabe (überschreibt die Auto-Erkennung, falls gesetzt)
+    fixe_zielgruppe = (data.get("zielgruppe") or "").strip()
     if len(roh) < 20:
         return jsonify({"success": False, "error": "Zu wenig Text"})
 
-    prompt = f"""Aus dem folgenden kopierten Text eines Firmenverzeichnisses (WKO Firmen A-Z) extrahiere alle Firmen.
+    kategorien = list(B2B_GESCHENK_ZIELGRUPPEN.keys())
+    kat_liste = ", ".join(kategorien)
+    prompt = f"""Aus dem folgenden Text eines Firmenverzeichnisses (WKO Firmen A-Z) extrahiere ALLE Firmen.
+Ordne jede Firma EINER dieser Kategorien zu (nutze exakt diese Schreibweise):
+{kat_liste}, Sonstige
+
 Gib NUR ein JSON-Array zurück, kein anderer Text. Format je Firma:
-{{"name":"", "address":"", "phone":"", "website":"", "contact_email":"", "contact_person":""}}
-Fehlende Felder als leerer String. Keine erfundenen Daten.
+{{"name":"", "address":"", "phone":"", "website":"", "contact_email":"", "contact_person":"", "kategorie":""}}
+- "kategorie" = eine der oben genannten. Passt keine, nimm "Sonstige".
+- Fehlende Felder als leerer String. Keine erfundenen Daten.
 
 TEXT:
 {roh[:6000]}"""
     antwort = call_gpt4(prompt)
-    # JSON aus der Antwort holen
     firmen = []
     try:
-        s = antwort.find("[")
-        e = antwort.rfind("]")
+        s = antwort.find("["); e = antwort.rfind("]")
         if s >= 0 and e > s:
             firmen = json.loads(antwort[s:e+1])
     except Exception:
         return jsonify({"success": False, "error": "Konnte Text nicht zerlegen, bitte erneut versuchen"})
 
     bestehend = set()
-    for row in (sb_get("geschenk_leads", "select=place_id,name") or []):
+    for row in (sb_get("geschenk_leads", "select=name") or []):
         bestehend.add((row.get("name") or "").lower())
 
     neu = 0
+    pro_kategorie = {}
     for f in firmen:
         name = (f.get("name") or "").strip()
         if not name or name.lower() in bestehend:
             continue
-        # Website scannen für Ansprechpartner/E-Mail, falls Website vorhanden
+        kategorie = fixe_zielgruppe or (f.get("kategorie") or "Sonstige").strip()
+        if kategorie not in kategorien and kategorie != "Sonstige":
+            kategorie = "Sonstige"
         website = f.get("website", "")
         analysis = analyze_website(website) if website else {"contact_email": "", "contact_person": ""}
         lead = {
@@ -739,7 +748,7 @@ TEXT:
             "phone": f.get("phone", ""),
             "contact_email": f.get("contact_email") or analysis.get("contact_email", ""),
             "contact_person": f.get("contact_person") or analysis.get("contact_person", ""),
-            "zielgruppe": zielgruppe,
+            "zielgruppe": kategorie,
             "bezirk": bezirk,
             "rating": 0,
             "email_betreff": "",
@@ -749,8 +758,9 @@ TEXT:
         }
         sb_insert("geschenk_leads", lead)
         bestehend.add(name.lower())
+        pro_kategorie[kategorie] = pro_kategorie.get(kategorie, 0) + 1
         neu += 1
-    return jsonify({"success": True, "erkannt": len(firmen), "neu": neu})
+    return jsonify({"success": True, "erkannt": len(firmen), "neu": neu, "pro_kategorie": pro_kategorie})
 
 @app.route("/geschenk/leads", methods=["GET"])
 def geschenk_leads_liste():
