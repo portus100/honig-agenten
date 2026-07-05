@@ -179,6 +179,7 @@
   <div class="tab" onclick="switchTab('foto')" id="tab-foto">📸 Foto Agent</div>
   <div class="tab" onclick="switchTab('prospekt')" id="tab-prospekt">📄 Prospekt</div>
   <div class="tab" onclick="switchTab('maerkte')" id="tab-maerkte">📍 Veranstalter</div>
+  <div class="tab" onclick="switchTab('geschenke')" id="tab-geschenke">🎁 Geschenke</div>
 </div>
 
 <div class="body">
@@ -256,6 +257,12 @@
           <div id="calendarGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:320px;margin-bottom:6px"></div>
           <div style="font-size:10px;color:var(--smoke);letter-spacing:.05em">Gewählt: <span id="selectedDatesText">keine</span></div>
         </div>
+      </div>
+
+      <div class="controls" style="margin-top:12px">
+        <div class="ctrl-label" style="margin-bottom:6px">📋 WKO-Liste einfügen (Text von firmen.wko.at kopieren)</div>
+        <textarea class="ctrl-select" id="scanWkoText" rows="3" placeholder="Kopierten Text hier einfügen…" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        <button class="btn btn-ghost btn-sm" onclick="scanWkoImport()" id="scanWkoBtn" style="margin-top:6px">Einlesen & verarbeiten</button>
       </div>
 
       <div class="progress" id="prog">
@@ -471,6 +478,71 @@
       <div id="veranstalterListe"><div class="empty"><div class="empty-icon">📍</div><h3>Veranstalter werden geladen...</h3><p>Beim ersten Öffnen werden die Start-Veranstalter angelegt.</p></div></div>
     </div>
 
+    <!-- ═══ B2B GESCHENKE ═══ -->
+    <div class="panel" id="panel-geschenke">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">B2B <em>Geschenke</em></div>
+          <div class="panel-sub">Weihnachts-Firmengeschenke · alle Zielgruppen · Sammelversand</div>
+        </div>
+        <button class="btn btn-dark btn-sm" onclick="geschenkScan()" id="geschenkBtn">🎁 Scan starten</button>
+      </div>
+
+      <div style="font-size:12px;color:var(--amber);margin-bottom:14px;line-height:1.6;letter-spacing:.03em">
+        Findet alle Firmen der gewählten Zielgruppen (kein Limit) und speichert sie dauerhaft.
+        Danach Mails generieren → prüfen/freigeben → Anfang August per Sammelversand raus.
+      </div>
+
+      <div class="controls" style="margin-bottom:14px">
+        <div class="ctrl-label" style="margin-bottom:6px">📋 WKO-Liste einfügen (Text von firmen.wko.at kopieren)</div>
+        <textarea class="ctrl-select" id="wkoText" rows="4" placeholder="Kopierten Text hier einfügen…" style="width:100%;resize:vertical;font-family:inherit"></textarea>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <input type="text" class="ctrl-select" id="wkoZielgruppe" placeholder="Zielgruppe (z.B. Vermögensberatung)" style="flex:1">
+          <button class="btn btn-dark btn-sm" onclick="wkoImport()" id="wkoBtn">Einlesen</button>
+        </div>
+      </div>
+
+      <div class="controls" style="margin-bottom:14px">
+        <div class="ctrl-label" style="margin-bottom:8px">Zielgruppen (leer = alle)</div>
+        <div id="zgAuswahl" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+        <div class="ctrl-label" style="margin-bottom:6px">Bezirk</div>
+        <select class="ctrl-select" id="geschenkBezirk" style="margin-bottom:10px">
+          <option value="Wien">Ganz Wien</option>
+          <option value="1010 Wien">1010</option><option value="1020 Wien">1020</option>
+          <option value="1030 Wien">1030</option><option value="1040 Wien">1040</option>
+          <option value="1050 Wien">1050</option><option value="1060 Wien">1060</option>
+          <option value="1070 Wien">1070</option><option value="1080 Wien">1080</option>
+          <option value="1090 Wien">1090</option><option value="1100 Wien">1100</option>
+          <option value="1110 Wien">1110</option><option value="1120 Wien">1120</option>
+          <option value="1130 Wien">1130</option><option value="1140 Wien">1140</option>
+          <option value="1150 Wien">1150</option><option value="1160 Wien">1160</option>
+          <option value="1170 Wien">1170</option><option value="1180 Wien">1180</option>
+          <option value="1190 Wien">1190</option><option value="1200 Wien">1200</option>
+          <option value="1210 Wien">1210</option><option value="1220 Wien">1220</option>
+          <option value="1230 Wien">1230</option>
+        </select>
+      </div>
+
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+        <button class="btn btn-ghost btn-sm" onclick="geschenkMailsGen()" id="genBtn">✍️ Mails generieren</button>
+        <button class="btn btn-ghost btn-sm" onclick="geschenkFreigeben()">✅ Alle freigeben</button>
+        <button class="btn btn-dark btn-sm" onclick="geschenkSenden()" id="sendBtn">📤 Sammelversand</button>
+        <button class="btn btn-ghost btn-sm" onclick="ladeGeschenkLeads()">🔄 Aktualisieren</button>
+      </div>
+
+      <div id="geschenkStats" style="font-size:12px;color:var(--smoke);margin-bottom:12px"></div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+        <select class="ctrl-select" id="filterZG" onchange="ladeGeschenkLeads()" style="flex:1;min-width:140px"><option value="">Alle Zielgruppen</option></select>
+        <select class="ctrl-select" id="filterStatus" onchange="ladeGeschenkLeads()" style="flex:1;min-width:120px">
+          <option value="">Alle Status</option>
+          <option value="entwurf">Entwurf</option>
+          <option value="freigegeben">Freigegeben</option>
+          <option value="gesendet">Gesendet</option>
+        </select>
+      </div>
+      <div id="geschenkListe"><div class="empty"><div class="empty-icon">🎁</div><h3>Noch keine Geschenk-Leads</h3><p>Wähle Zielgruppen und starte den Scan.</p></div></div>
+    </div>
+
   </div>
 </div>
 
@@ -492,6 +564,154 @@ function switchTab(tab) {
   if (tab === 'prospekt' && document.getElementById('prospektVorschau').style.display !== 'none') genProspekt();
   if (tab === 'brand') loadBrand();
   if (tab === 'maerkte') loadVeranstalter();
+  if (tab === 'geschenke') { ladeZielgruppen(); ladeGeschenkLeads(); }
+}
+
+// ── B2B GESCHENKE ──
+let ZIELGRUPPEN_GEWAEHLT = new Set();
+
+async function ladeZielgruppen() {
+  const box = document.getElementById('zgAuswahl');
+  if (box.children.length > 0) return;
+  try {
+    const res = await fetch('/geschenk/zielgruppen');
+    const data = await res.json();
+    box.innerHTML = data.zielgruppen.map(z =>
+      `<label style="display:inline-flex;align-items:center;gap:4px;background:var(--paper2);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:12px;cursor:pointer">
+        <input type="checkbox" value="${z}" onchange="toggleZG(this)"> ${z}
+      </label>`).join('');
+    // Filter-Dropdown auch befüllen
+    const fz = document.getElementById('filterZG');
+    if (fz && fz.children.length <= 1) {
+      data.zielgruppen.forEach(z => {
+        const o = document.createElement('option'); o.value = z; o.textContent = z; fz.appendChild(o);
+      });
+    }
+  } catch(e) {}
+}
+
+function toggleZG(el) {
+  if (el.checked) ZIELGRUPPEN_GEWAEHLT.add(el.value);
+  else ZIELGRUPPEN_GEWAEHLT.delete(el.value);
+}
+
+async function wkoImport() {
+  const text = document.getElementById('wkoText').value.trim();
+  const zg = document.getElementById('wkoZielgruppe').value.trim() || 'WKO-Import';
+  if (text.length < 20) { showToast('Bitte Text einfügen'); return; }
+  const btn = document.getElementById('wkoBtn');
+  btn.disabled = true; btn.textContent = 'Liest…';
+  try {
+    const res = await fetch('/geschenk/import', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text, zielgruppe: zg, bezirk: document.getElementById('geschenkBezirk').value})
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${data.erkannt} erkannt, ${data.neu} neu übernommen`);
+      document.getElementById('wkoText').value = '';
+      ladeGeschenkLeads();
+    } else showToast(data.error || 'Fehler');
+  } catch(e) { showToast('Fehler: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Einlesen'; }
+}
+
+async function geschenkScan() {
+  const btn = document.getElementById('geschenkBtn');
+  btn.disabled = true; btn.textContent = '🎁 Scannt…';
+  try {
+    const res = await fetch('/geschenk/scan', {
+      method:'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        zielgruppen: Array.from(ZIELGRUPPEN_GEWAEHLT),
+        bezirk: document.getElementById('geschenkBezirk').value
+      })
+    });
+    const data = await res.json();
+    if (data.success) { showToast(`${data.neu} neue Leads gefunden`); ladeGeschenkLeads(); }
+    else showToast('Fehler beim Scan');
+  } catch(e) { showToast('Fehler: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = '🎁 Scan starten'; }
+}
+
+async function geschenkMailsGen() {
+  const btn = document.getElementById('genBtn');
+  btn.disabled = true; btn.textContent = '✍️ Generiert…';
+  try {
+    const res = await fetch('/geschenk/mails-generieren', {method:'POST'});
+    const data = await res.json();
+    showToast(`${data.erzeugt} Mails erstellt${data.verbleibend ? ', '+data.verbleibend+' offen (nochmal klicken)' : ''}`);
+    ladeGeschenkLeads();
+  } catch(e) { showToast('Fehler: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = '✍️ Mails generieren'; }
+}
+
+async function geschenkFreigeben() {
+  if (!confirm('Alle Entwürfe freigeben?')) return;
+  try {
+    await fetch('/geschenk/freigeben', {
+      method:'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({alle: true})
+    });
+    showToast('Freigegeben'); ladeGeschenkLeads();
+  } catch(e) {}
+}
+
+async function geschenkSenden() {
+  if (!confirm('Sammelversand: alle freigegebenen Mails jetzt raus?')) return;
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true; btn.textContent = '📤 Sendet…';
+  try {
+    const res = await fetch('/geschenk/senden', {method:'POST'});
+    const data = await res.json();
+    showToast(`${data.gesendet} Mails versendet`);
+    ladeGeschenkLeads();
+  } catch(e) { showToast('Fehler: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = '📤 Sammelversand'; }
+}
+
+async function ladeGeschenkLeads() {
+  try {
+    const zg = document.getElementById('filterZG')?.value || '';
+    const st = document.getElementById('filterStatus')?.value || '';
+    const qs = new URLSearchParams();
+    if (zg) qs.set('zielgruppe', zg);
+    if (st) qs.set('status', st);
+    const res = await fetch('/geschenk/leads?' + qs.toString());
+    const data = await res.json();
+    const leads = data.leads || [];
+    const stat = {entwurf:0, freigegeben:0, gesendet:0};
+    leads.forEach(l => stat[l.mail_status] = (stat[l.mail_status]||0)+1);
+    document.getElementById('geschenkStats').textContent =
+      `${leads.length} Leads · ${stat.entwurf} Entwurf · ${stat.freigegeben} freigegeben · ${stat.gesendet} gesendet`;
+    const box = document.getElementById('geschenkListe');
+    if (leads.length === 0) {
+      box.innerHTML = '<div class="empty"><div class="empty-icon">🎁</div><h3>Keine Leads</h3><p>Anderer Filter oder Scan starten.</p></div>';
+      return;
+    }
+    // Nach Zielgruppe gruppieren
+    const gruppen = {};
+    leads.forEach(l => { (gruppen[l.zielgruppe||'—'] = gruppen[l.zielgruppe||'—']||[]).push(l); });
+    let html = '';
+    Object.keys(gruppen).sort().forEach(g => {
+      html += `<div style="font-weight:700;font-size:13px;color:var(--gold);margin:14px 0 8px;letter-spacing:.03em">${g} <span style="color:var(--smoke);font-weight:400">(${gruppen[g].length})</span></div>`;
+      html += gruppen[g].map(l => {
+        const farbe = l.mail_status==='gesendet' ? 'var(--smoke)' : l.mail_status==='freigegeben' ? 'var(--gold)' : 'var(--amber)';
+        return `<div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+            <div><div style="font-weight:700">${l.name||'?'}</div>
+            <div style="font-size:12px;color:var(--smoke)">${l.bezirk||''} · ${l.address||''}</div></div>
+            <div style="font-size:10px;color:${farbe};white-space:nowrap">${l.mail_status}</div>
+          </div>
+          <div style="font-size:12px;color:var(--smoke);margin-top:4px">
+            ${l.contact_person ? '👤 '+l.contact_person+' · ' : ''}${l.contact_email || 'keine E-Mail'}${l.phone ? ' · '+l.phone : ''}
+          </div>
+          ${l.email_draft ? `<div style="margin-top:8px;font-size:12px;background:var(--paper);border:1px solid var(--border);border-radius:6px;padding:8px;white-space:pre-wrap;max-height:120px;overflow:auto"><strong>${l.email_betreff||''}</strong>\n${l.email_draft}</div>` : ''}
+        </div>`;
+      }).join('');
+    });
+    box.innerHTML = html;
+  } catch(e) {}
 }
 
 // ── CHAT ──
@@ -615,6 +835,26 @@ function buildCalendar() {
 }
 
 // ── SCAN ──
+async function scanWkoImport() {
+  const text = document.getElementById('scanWkoText').value.trim();
+  if (text.length < 20) { showToast('Bitte Text einfügen'); return; }
+  const btn = document.getElementById('scanWkoBtn');
+  btn.disabled = true; btn.textContent = 'Liest…';
+  try {
+    const res = await fetch('/scan/import', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text, target_type: document.getElementById('targetType').value})
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${data.erkannt} erkannt, ${data.neu} neu übernommen`);
+      document.getElementById('scanWkoText').value = '';
+      loadLeads('pending_approval', 'approvalsList');
+    } else showToast(data.error || 'Fehler');
+  } catch(e) { showToast('Fehler: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Einlesen & verarbeiten'; }
+}
+
 async function startScan() {
   if (scanning) return;
   scanning = true;

@@ -323,32 +323,46 @@ def get_place_details(place_id):
     except:
         return {"website": "", "phone": "", "opening_hours": []}
 
-def search_places(query, location, max_results=10):
+def search_places(query, location, max_results=10, pages=1):
+    """Google Places Textsuche. pages=1..3 holt bis zu 3 Seiten (max ~60 Treffer).
+    Details (Website/Telefon/Öffnungszeiten) werden pro Treffer nachgeladen."""
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {"query": f"{query} {location}", "key": GOOGLE_API_KEY, "language": "de", "region": "at"}
     results = []
     seen = set()
     try:
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        for place in data.get("results", [])[:max_results]:
-            pid = place.get("place_id", "")
-            if pid in seen:
-                continue
-            seen.add(pid)
-            details = get_place_details(pid) if pid else {}
-            geo = place.get("geometry", {}).get("location", {})
-            results.append({
-                "name": place.get("name", ""),
-                "address": place.get("formatted_address", ""),
-                "rating": place.get("rating", 0),
-                "place_id": pid,
-                "lat": geo.get("lat"),
-                "lng": geo.get("lng"),
-                "website": details.get("website", ""),
-                "phone": details.get("phone", ""),
-                "opening_hours": details.get("opening_hours", [])
-            })
+        for seite in range(max(1, min(pages, 3))):
+            r = requests.get(url, params=params, timeout=10)
+            data = r.json()
+            for place in data.get("results", []):
+                if len(results) >= max_results and pages == 1:
+                    break
+                pid = place.get("place_id", "")
+                if not pid or pid in seen:
+                    continue
+                seen.add(pid)
+                details = get_place_details(pid)
+                geo = place.get("geometry", {}).get("location", {})
+                results.append({
+                    "name": place.get("name", ""),
+                    "address": place.get("formatted_address", ""),
+                    "rating": place.get("rating", 0),
+                    "place_id": pid,
+                    "lat": geo.get("lat"),
+                    "lng": geo.get("lng"),
+                    "website": details.get("website", ""),
+                    "phone": details.get("phone", ""),
+                    "opening_hours": details.get("opening_hours", [])
+                })
+            # nächste Seite vorbereiten
+            token = data.get("next_page_token")
+            if not token or seite >= pages - 1:
+                break
+            import time as _t
+            _t.sleep(2)  # Google braucht kurz, bis der Token gültig ist
+            params = {"pagetoken": token, "key": GOOGLE_API_KEY}
+        if pages == 1:
+            results = results[:max_results]
     except Exception as e:
         print(f"Google Maps Fehler: {e}")
     return results
@@ -596,6 +610,306 @@ BETREFF: [Betreff]
     
     return call_gpt4(prompt)
 
+def write_gift_email(business, zielgruppe):
+    """Individuelle B2B-Weihnachtsgeschenk-Mail pro Firma."""
+    contact = business.get("contact_person") or ""
+    if contact:
+        salutation = f"Sehr geehrte/r {contact},"
+        weiterleit = ""
+    else:
+        salutation = "Sehr geehrte Damen und Herren,"
+        weiterleit = ("- Falls du nicht die richtige Ansprechperson für Firmengeschenke bist, "
+                      "bitte höflich um Weiterleitung an die zuständige Person.")
+    prompt = f"""Schreibe eine kurze, hochwertige B2B-E-Mail für Josef Mayer von "Honigspirituosen Josef Mayer".
+Thema: personalisierte Weihnachtsgeschenke für Kunden oder Mitarbeiter.
+
+Empfänger: {business.get('name','')} – Branche: {zielgruppe}
+Anrede: {salutation}
+
+Angebot:
+- Honigveredelte Premium-Spirituosen (Gin, Whisky, Rum) als Firmengeschenk
+- Personalisierbar mit dem LOGO DES KUNDEN vorne auf dem Etikett (die Marke des Empfängers steht im Vordergrund, nicht meine)
+- Handgegossene Bienenwachskerze aus eigener Imkerei als Beilage – regional, handgemacht, einzigartig
+- Zwei Linien: Einzelflasche (als Werbegeschenk bis 40€ netto ggf. steuerlich absetzbar) und hochwertiges Geschenk-Set
+- Frühe Bestellung nötig, da alles handgefertigt wird
+
+Anforderungen:
+- Max 6 Sätze, edel und persönlich, kein Werbe-Blabla
+- Betonung: regional, handgemacht, personalisiert mit IHREM Logo
+- Hinweis auf frühen Bestellschluss (Kerzen handgefertigt)
+- Bitte um kurzes Gespräch / Musteranfrage
+{weiterleit}
+- Signatur: Mit freundlichen Grüßen\\nJosef Mayer\\nHonigspirituosen Josef Mayer\\nwww.honigspirituosen.at
+
+Format:
+BETREFF: [Betreff]
+---
+[E-Mail Text]""" + brand_kontext()
+    return call_gpt4(prompt)
+
+@app.route("/geschenk/scan", methods=["POST"])
+def geschenk_scan():
+    """Scannt B2B-Geschenk-Zielgruppen OHNE Limit, speichert dauerhaft in geschenk_leads."""
+    data = request.json or {}
+    zielgruppen = data.get("zielgruppen") or list(B2B_GESCHENK_ZIELGRUPPEN.keys())
+    bezirk = data.get("bezirk", "Wien")
+
+    bestehend = set()
+    for row in (sb_get("geschenk_leads", "select=place_id") or []):
+        if row.get("place_id"):
+            bestehend.add(row["place_id"])
+
+    neu = 0
+    seen = set()
+    for zg in zielgruppen:
+        begriffe = B2B_GESCHENK_ZIELGRUPPEN.get(zg, [zg])
+        for q in begriffe:
+            for p in search_places(q, bezirk, max_results=60, pages=3):
+                pid = p.get("place_id", "")
+                if not pid or pid in seen or pid in bestehend:
+                    continue
+                seen.add(pid)
+                analysis = analyze_website(p.get("website", ""))
+                betreff, text = "", ""
+                lead = {
+                    "name": p["name"],
+                    "address": p["address"],
+                    "place_id": pid,
+                    "website": p.get("website", ""),
+                    "phone": p.get("phone", ""),
+                    "contact_email": analysis.get("contact_email", ""),
+                    "contact_person": analysis.get("contact_person", ""),
+                    "zielgruppe": zg,
+                    "bezirk": bezirk,
+                    "rating": p.get("rating", 0),
+                    "email_betreff": "",
+                    "email_draft": "",
+                    "mail_status": "entwurf",
+                    "created_at": datetime.now().isoformat()
+                }
+                sb_insert("geschenk_leads", lead)
+                neu += 1
+    return jsonify({"success": True, "neu": neu, "zielgruppen": zielgruppen, "bezirk": bezirk})
+
+@app.route("/geschenk/import", methods=["POST"])
+def geschenk_import():
+    """Nimmt kopierten WKO-Text, zerlegt ihn via GPT in Firmen, speichert als Leads."""
+    data = request.json or {}
+    roh = (data.get("text") or "").strip()
+    zielgruppe = data.get("zielgruppe", "WKO-Import")
+    bezirk = data.get("bezirk", "Wien")
+    if len(roh) < 20:
+        return jsonify({"success": False, "error": "Zu wenig Text"})
+
+    prompt = f"""Aus dem folgenden kopierten Text eines Firmenverzeichnisses (WKO Firmen A-Z) extrahiere alle Firmen.
+Gib NUR ein JSON-Array zurück, kein anderer Text. Format je Firma:
+{{"name":"", "address":"", "phone":"", "website":"", "contact_email":"", "contact_person":""}}
+Fehlende Felder als leerer String. Keine erfundenen Daten.
+
+TEXT:
+{roh[:6000]}"""
+    antwort = call_gpt4(prompt)
+    # JSON aus der Antwort holen
+    firmen = []
+    try:
+        s = antwort.find("[")
+        e = antwort.rfind("]")
+        if s >= 0 and e > s:
+            firmen = json.loads(antwort[s:e+1])
+    except Exception:
+        return jsonify({"success": False, "error": "Konnte Text nicht zerlegen, bitte erneut versuchen"})
+
+    bestehend = set()
+    for row in (sb_get("geschenk_leads", "select=place_id,name") or []):
+        bestehend.add((row.get("name") or "").lower())
+
+    neu = 0
+    for f in firmen:
+        name = (f.get("name") or "").strip()
+        if not name or name.lower() in bestehend:
+            continue
+        # Website scannen für Ansprechpartner/E-Mail, falls Website vorhanden
+        website = f.get("website", "")
+        analysis = analyze_website(website) if website else {"contact_email": "", "contact_person": ""}
+        lead = {
+            "name": name,
+            "address": f.get("address", ""),
+            "place_id": "",
+            "website": website,
+            "phone": f.get("phone", ""),
+            "contact_email": f.get("contact_email") or analysis.get("contact_email", ""),
+            "contact_person": f.get("contact_person") or analysis.get("contact_person", ""),
+            "zielgruppe": zielgruppe,
+            "bezirk": bezirk,
+            "rating": 0,
+            "email_betreff": "",
+            "email_draft": "",
+            "mail_status": "entwurf",
+            "created_at": datetime.now().isoformat()
+        }
+        sb_insert("geschenk_leads", lead)
+        bestehend.add(name.lower())
+        neu += 1
+    return jsonify({"success": True, "erkannt": len(firmen), "neu": neu})
+
+@app.route("/geschenk/leads", methods=["GET"])
+def geschenk_leads_liste():
+    status = request.args.get("status", "")
+    zielgruppe = request.args.get("zielgruppe", "")
+    bezirk = request.args.get("bezirk", "")
+    filt = ""
+    if status:     filt += f"&mail_status=eq.{status}"
+    if zielgruppe: filt += f"&zielgruppe=eq.{zielgruppe}"
+    if bezirk:     filt += f"&bezirk=eq.{bezirk}"
+    rows = sb_get("geschenk_leads", f"select=*{filt}&order=zielgruppe.asc,created_at.desc")
+    return jsonify({"success": True, "leads": rows or []})
+
+@app.route("/geschenk/mails-generieren", methods=["POST"])
+def geschenk_mails_generieren():
+    """Erzeugt für alle Entwurfs-Leads (ohne Text) individuelle Mails via GPT."""
+    rows = sb_get("geschenk_leads", "select=*&email_draft=eq.&order=created_at.asc") or []
+    erzeugt = 0
+    for lead in rows[:40]:  # Batch, um Timeouts zu vermeiden
+        roh = write_gift_email(lead, lead.get("zielgruppe", ""))
+        betreff, text = "", roh
+        if "BETREFF:" in roh and "---" in roh:
+            try:
+                betreff = roh.split("BETREFF:")[1].split("---")[0].strip()
+                text = roh.split("---", 1)[1].strip()
+            except Exception:
+                pass
+        sb_update("geschenk_leads", f"id=eq.{lead['id']}",
+                  {"email_betreff": betreff, "email_draft": text})
+        erzeugt += 1
+    return jsonify({"success": True, "erzeugt": erzeugt, "verbleibend": max(0, len(rows) - erzeugt)})
+
+@app.route("/geschenk/freigeben", methods=["POST"])
+def geschenk_freigeben():
+    """Gibt Leads frei (einzeln per id, oder alle einer Zielgruppe)."""
+    data = request.json or {}
+    if data.get("id"):
+        sb_update("geschenk_leads", f"id=eq.{data['id']}", {"mail_status": "freigegeben"})
+    elif data.get("zielgruppe"):
+        sb_update("geschenk_leads",
+                  f"zielgruppe=eq.{data['zielgruppe']}&mail_status=eq.entwurf",
+                  {"mail_status": "freigegeben"})
+    elif data.get("alle"):
+        sb_update("geschenk_leads", "mail_status=eq.entwurf", {"mail_status": "freigegeben"})
+    return jsonify({"success": True})
+
+@app.route("/geschenk/senden", methods=["POST"])
+def geschenk_senden():
+    """Sammelversand: alle freigegebenen Leads mit E-Mail-Adresse via Make raus."""
+    rows = sb_get("geschenk_leads",
+        "select=*&mail_status=eq.freigegeben&contact_email=neq.&order=created_at.asc") or []
+    gesendet = 0
+    for lead in rows:
+        if MAKE_WEBHOOK_URL:
+            try:
+                requests.post(MAKE_WEBHOOK_URL, json={
+                    "action": "send_email",
+                    "betreff": lead.get("email_betreff", ""),
+                    "email": lead.get("email_draft", ""),
+                    "recipient": lead.get("contact_email", ""),
+                    "timestamp": datetime.now().isoformat()
+                }, timeout=10)
+            except Exception:
+                continue
+        sb_update("geschenk_leads", f"id=eq.{lead['id']}",
+                  {"mail_status": "gesendet", "gesendet_am": datetime.now().isoformat()})
+        gesendet += 1
+    return jsonify({"success": True, "gesendet": gesendet})
+
+@app.route("/geschenk/zielgruppen", methods=["GET"])
+def geschenk_zielgruppen():
+    return jsonify({"success": True, "zielgruppen": list(B2B_GESCHENK_ZIELGRUPPEN.keys())})
+
+# ════════════════════════════════════════
+# B2B-GESCHENK ZIELGRUPPEN (zentral, mandantenfähig-freundlich)
+# Jede Zielgruppe: Suchbegriffe für Google Places.
+# Neue Branche = neue Zeile, kein Code-Umbau.
+# ════════════════════════════════════════
+B2B_GESCHENK_ZIELGRUPPEN = {
+    "Kanzleien & Notare":      ["Rechtsanwalt", "Notar", "Anwaltskanzlei"],
+    "Steuerberatung":          ["Steuerberater", "Wirtschaftsprüfer", "Steuerkanzlei"],
+    "Vermögensberatung":       ["Vermögensberatung", "Finanzberatung", "Private Banking", "Vermögensberater"],
+    "Versicherungen":          ["Versicherungsbüro", "Versicherungsmakler", "Versicherungsagentur"],
+    "Immobilien":              ["Immobilienmakler", "Immobilienbüro"],
+    "Architektur & Planung":   ["Architekturbüro", "Planungsbüro", "Ingenieurbüro"],
+    "Agenturen":               ["Werbeagentur", "PR-Agentur", "Marketingagentur", "IT-Agentur"],
+    "Banken (Filialen)":       ["Bankfiliale", "Sparkasse", "Raiffeisenbank"],
+    "Hotels & Wellness":       ["Boutique Hotel", "Wellnesshotel", "Spa Hotel"],
+    "Weingüter":               ["Weingut", "Winzer", "Vinothek"],
+    "Autohäuser (Premium)":    ["Autohaus Premium", "BMW Händler", "Mercedes Händler", "Audi Händler"],
+    "Bau & Handwerk (gehoben)":["Bauträger", "Baufirma", "Tischlerei Meisterbetrieb"],
+    "Ärzte & Apotheken":       ["Arztpraxis", "Zahnarzt", "Apotheke", "Privatordination"],
+    "Kammern & Verbände":      ["Wirtschaftskammer", "Berufsverband", "Innung"],
+    "Konzern-Standorte":       ["Siemens", "OMV", "Erste Bank", "Magna", "A1 Telekom", "Rewe", "Spar Zentrale"],
+    "Mittelstand":             ["GmbH Produktion", "Handelsunternehmen", "mittelständisches Unternehmen"],
+}
+
+@app.route("/scan/import", methods=["POST"])
+def scan_import():
+    """WKO-Text zerlegen und als Leads ins Haupt-Dashboard (leads-Tabelle) übernehmen."""
+    data = request.json or {}
+    roh = (data.get("text") or "").strip()
+    target_type = data.get("target_type", "Feinkostgeschäft")
+    if len(roh) < 20:
+        return jsonify({"success": False, "error": "Zu wenig Text"})
+
+    prompt = f"""Aus dem folgenden kopierten Text eines Firmenverzeichnisses (WKO Firmen A-Z) extrahiere alle Firmen.
+Gib NUR ein JSON-Array zurück, kein anderer Text. Format je Firma:
+{{"name":"", "address":"", "phone":"", "website":"", "contact_email":"", "contact_person":""}}
+Fehlende Felder als leerer String. Keine erfundenen Daten.
+
+TEXT:
+{roh[:6000]}"""
+    antwort = call_gpt4(prompt)
+    firmen = []
+    try:
+        s = antwort.find("["); e = antwort.rfind("]")
+        if s >= 0 and e > s:
+            firmen = json.loads(antwort[s:e+1])
+    except Exception:
+        return jsonify({"success": False, "error": "Konnte Text nicht zerlegen, bitte erneut versuchen"})
+
+    appointments = calculate_appointments(["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"])
+    bestehend = set()
+    for row in (sb_get("leads", "select=name") or []):
+        bestehend.add((row.get("name") or "").lower())
+
+    neu = 0
+    for f in firmen:
+        name = (f.get("name") or "").strip()
+        if not name or name.lower() in bestehend:
+            continue
+        website = f.get("website", "")
+        analysis = analyze_website(website) if website else {"score": 0, "signals": [], "contact_email": "", "contact_person": ""}
+        business = {"name": name, "address": f.get("address", ""),
+                    "contact_person": f.get("contact_person") or analysis.get("contact_person", "")}
+        email = write_email(business, analysis, appointments[:3])
+        lead = {
+            "name": name,
+            "address": f.get("address", ""),
+            "place_id": "",
+            "website": website,
+            "phone": f.get("phone", ""),
+            "contact_email": f.get("contact_email") or analysis.get("contact_email", ""),
+            "contact_person": business["contact_person"],
+            "score": analysis.get("score", 0),
+            "signals": json.dumps(analysis.get("signals", [])),
+            "rating": 0,
+            "email_draft": email,
+            "appointment_slots": json.dumps(appointments[:3]),
+            "target_type": target_type,
+            "status": "pending_approval",
+            "created_at": datetime.now().isoformat()
+        }
+        sb_insert("leads", lead)
+        bestehend.add(name.lower())
+        neu += 1
+    return jsonify({"success": True, "erkannt": len(firmen), "neu": neu})
+
 @app.route("/scan", methods=["POST"])
 def scan():
     data = request.json or {}
@@ -617,7 +931,7 @@ def scan():
     already_scanned = get_scanned_place_ids()
     seen = set()
     for q in queries[:2]:
-        for p in search_places(q, bezirk, max_results // 2):
+        for p in search_places(q, bezirk, max_results=60, pages=3):
             if p["place_id"] not in seen and p["place_id"] not in already_scanned:
                 seen.add(p["place_id"])
                 all_places.append(p)
@@ -1927,7 +2241,7 @@ def partner_scan():
     all_places = []
     seen = set()
     for q in queries[:2]:
-        for p in search_places(q, bezirk, max_results // 2):
+        for p in search_places(q, bezirk, max_results=60, pages=3):
             pid = p["place_id"]
             if pid not in seen and pid not in schon_da:
                 seen.add(pid)
