@@ -747,30 +747,28 @@ TEXT:
     if not firmen:
         return jsonify({"success": False, "error": "Konnte Text nicht zerlegen — bitte kleinere Portion einfuegen"})
 
-    bestehend_namen = set()
-    bestehend_adressen = set()
+    bestehend = set()
     for row in (sb_get("geschenk_leads", "select=name,address") or []):
-        bestehend_namen.add((row.get("name") or "").lower())
-        adr = (row.get("address") or "").lower().replace(" ", "")
-        if adr:
-            bestehend_adressen.add(adr)
+        schluessel = (row.get("name") or "").lower().strip() + "|" + (row.get("address") or "").lower().replace(" ", "")
+        bestehend.add(schluessel)
 
     neu = 0
     pro_kategorie = {}
-    gesehen_adressen = set()  # innerhalb dieses Imports
+    gesehen = set()  # innerhalb dieses Imports
     for f in firmen:
         name = (f.get("name") or "").strip()
         if not name:
             continue
-        adr_key = (f.get("address") or "").lower().replace(" ", "")
-        # Dublette: gleicher Name ODER gleiche Adresse (fängt Firmen mit vielen Gewerbescheinen)
-        if name.lower() in bestehend_namen:
+        # Dublette nur, wenn Name UND Adresse identisch (echte Mehrfacheinträge derselben Firma)
+        schluessel = name.lower() + "|" + (f.get("address") or "").lower().replace(" ", "")
+        if schluessel in bestehend or schluessel in gesehen:
             continue
-        if adr_key and (adr_key in bestehend_adressen or adr_key in gesehen_adressen):
-            continue
-        kategorie = fixe_zielgruppe or (f.get("kategorie") or "Sonstige").strip()
-        if kategorie not in kategorien and kategorie != "Sonstige":
-            kategorie = "Sonstige"
+        if fixe_zielgruppe:
+            kategorie = fixe_zielgruppe  # vom Nutzer bewusst gesetzt (auch eigene Branche erlaubt)
+        else:
+            kategorie = (f.get("kategorie") or "Sonstige").strip()
+            if kategorie not in kategorien and kategorie != "Sonstige":
+                kategorie = "Sonstige"
         # KEIN Website-Scan hier (zu langsam bei Masse) — nur WKO-Daten übernehmen.
         # Der Ansprechpartner-Scan passiert später bei der Mail-Generierung.
         lead = {
@@ -790,9 +788,8 @@ TEXT:
             "created_at": datetime.now().isoformat()
         }
         sb_insert("geschenk_leads", lead)
-        bestehend_namen.add(name.lower())
-        if adr_key:
-            gesehen_adressen.add(adr_key)
+        bestehend.add(schluessel)
+        gesehen.add(schluessel)
         pro_kategorie[kategorie] = pro_kategorie.get(kategorie, 0) + 1
         neu += 1
     return jsonify({"success": True, "erkannt": len(firmen), "neu": neu, "pro_kategorie": pro_kategorie})
@@ -1401,6 +1398,94 @@ def telegram_test():
     return jsonify({"success": ok, "configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)})
 
 # ════════════════════════════════════════
+# AI VISIBILITY MONITOR (Phase 1 — nur Gemini + Grounding)
+# ════════════════════════════════════════
+def _iso_woche():
+    jahr, kw, _ = datetime.now().isocalendar()
+    return f"{jahr}-KW{kw:02d}"
+
+@app.route("/ai-visibility/scan", methods=["POST"])
+def ai_visibility_scan():
+    """Jede aktive Frage 3x mit Grounding, jede Antwort bewerten, alles speichern.
+    Änderung ggü. Vorwoche → Telegram."""
+    fragen = sb_get("ai_visibility_queries", "select=*&aktiv=eq.true&order=id.asc") or []
+    if not fragen:
+        return jsonify({"success": False, "error": "Keine aktiven Fragen"})
+    woche = _iso_woche()
+    aenderungen = []
+    zusammenfassung = []
+    for f in fragen:
+        nennungen = 0; scores = []; halluzinationen = 0
+        for run in (1, 2, 3):
+            rohantwort, quellen = call_gemini_grounded(f["frage_text"])
+            bew = bewerte_antwort(f["frage_text"], f.get("kategorie", ""), rohantwort, len(quellen))
+            if bew.get("marke_genannt"): nennungen += 1
+            scores.append(bew.get("score", 0))
+            if bew.get("halluzination_flag"): halluzinationen += 1
+            sb_insert("ai_visibility_results", {
+                "query_id": f["id"], "frage_text": f["frage_text"],
+                "kategorie": f.get("kategorie", ""), "prompt_version": f.get("prompt_version", "v1"),
+                "run_timestamp": datetime.now().isoformat(), "run_nummer": run, "woche": woche,
+                "rohantwort": rohantwort[:4000], "quellen": json.dumps(quellen),
+                "quellen_anzahl": len(quellen), "marke_genannt": bool(bew.get("marke_genannt")),
+                "score": bew.get("score", 0), "confidence": bew.get("confidence", 0),
+                "halluzination_flag": bool(bew.get("halluzination_flag")),
+                "halluzination_detail": bew.get("halluzination_detail", "")
+            })
+        avg = round(sum(scores) / len(scores)) if scores else 0
+        zusammenfassung.append({"frage": f["frage_text"], "kategorie": f.get("kategorie", ""),
+                                "stabilitaet": f"{nennungen}/3", "score": avg, "halluzinationen": halluzinationen})
+        vorwoche = sb_get("ai_visibility_results",
+            f"select=marke_genannt&query_id=eq.{f['id']}&woche=neq.{woche}&order=run_timestamp.desc&limit=3")
+        if vorwoche:
+            vorher = any(r.get("marke_genannt") for r in vorwoche)
+            jetzt = nennungen > 0
+            if vorher != jetzt:
+                aenderungen.append((f"✅ NEU erwähnt bei: {f['frage_text']}" if jetzt
+                                    else f"❌ NICHT mehr erwähnt bei: {f['frage_text']}"))
+        if halluzinationen > 0:
+            aenderungen.append(f"⚠️ Halluzination bei: {f['frage_text']} ({halluzinationen}/3)")
+    if aenderungen:
+        send_telegram("🔍 AI-Sichtbarkeit – Änderungen diese Woche:\n\n" + "\n".join(aenderungen[:15]))
+    return jsonify({"success": True, "woche": woche, "geprueft": len(fragen),
+                    "zusammenfassung": zusammenfassung, "aenderungen": aenderungen})
+
+@app.route("/ai-visibility/ergebnisse", methods=["GET"])
+def ai_visibility_ergebnisse():
+    woche = request.args.get("woche", "") or _iso_woche()
+    rows = sb_get("ai_visibility_results",
+        f"select=*&woche=eq.{woche}&order=query_id.asc,run_nummer.asc") or []
+    proFrage = {}
+    for r in rows:
+        qid = r["query_id"]
+        if qid not in proFrage:
+            proFrage[qid] = {"frage": r["frage_text"], "kategorie": r["kategorie"],
+                             "runs": [], "nennungen": 0, "scores": [], "halluzinationen": 0, "quellen": []}
+        g = proFrage[qid]; g["runs"].append(r)
+        if r["marke_genannt"]: g["nennungen"] += 1
+        g["scores"].append(r["score"])
+        if r["halluzination_flag"]: g["halluzinationen"] += 1
+        try: g["quellen"].extend(json.loads(r.get("quellen") or "[]"))
+        except: pass
+    ergebnis = []
+    for qid, g in proFrage.items():
+        ergebnis.append({"frage": g["frage"], "kategorie": g["kategorie"],
+            "stabilitaet": f"{g['nennungen']}/{len(g['runs'])}",
+            "score": round(sum(g["scores"])/len(g["scores"])) if g["scores"] else 0,
+            "halluzinationen": g["halluzinationen"], "quellen": g["quellen"][:5],
+            "rohantwort": g["runs"][0]["rohantwort"] if g["runs"] else ""})
+    gesamt = round(sum(e["score"] for e in ergebnis)/len(ergebnis)) if ergebnis else 0
+    return jsonify({"success": True, "woche": woche, "gesamt_score": gesamt, "ergebnisse": ergebnis})
+
+@app.route("/ai-visibility/wochen", methods=["GET"])
+def ai_visibility_wochen():
+    rows = sb_get("ai_visibility_results", "select=woche&order=run_timestamp.desc") or []
+    wochen = []
+    for r in rows:
+        if r["woche"] not in wochen: wochen.append(r["woche"])
+    return jsonify({"success": True, "wochen": wochen[:20]})
+
+# ════════════════════════════════════════
 # CONTENT CREATOR AGENT
 # Foto/Bild → Captions für IG Feed, IG Story, Facebook, LinkedIn
 # ════════════════════════════════════════
@@ -1438,6 +1523,165 @@ def call_claude_vision(system_prompt, user_text, image_base64, media_type="image
         return data.get("content", [{}])[0].get("text", "")
     except Exception as e:
         return f"Claude Vision Fehler: {str(e)}"
+
+# ════════════════════════════════════════
+# GEMINI (Bild + Text) für den Content Creator
+# Modellname hier oben leicht änderbar — echten Namen aus Google AI Studio eintragen.
+# ════════════════════════════════════════
+GEMINI_MODEL = "gemini-2.0-flash"  # ← ggf. aktuellen Namen aus AI Studio eintragen
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+def call_gemini_vision(system_prompt, user_text, image_base64, media_type="image/jpeg"):
+    """Gemini mit Bild-Input. image_base64 ohne data:... Prefix.
+    Liefert reinen Text zurück (gleiche Signatur wie call_claude_vision)."""
+    if not GEMINI_API_KEY:
+        return "GEMINI_API_KEY fehlt"
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        r = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"inline_data": {"mime_type": media_type, "data": image_base64}},
+                        {"text": user_text}
+                    ]
+                }],
+                "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.7}
+            },
+            timeout=30
+        )
+        data = r.json()
+        if not r.ok:
+            return f"Gemini Vision Fehler: {data}"
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return f"Gemini Vision Fehler: {str(e)}"
+
+# Bildgenerierung via Nano Banana (Gemini Image). Modellname leicht änderbar.
+# gemini-3.1-flash-image = Nano Banana 2 (gutes Preis-Leistungs-Verhältnis)
+# gemini-3-pro-image     = Nano Banana Pro (höchste Qualität, teurer)
+# gemini-2.5-flash-image = Nano Banana (Klassiker, günstig, stabil)
+GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"  # ← ggf. neueren Namen aus AI Studio eintragen
+
+# ════════════════════════════════════════
+# FAKTEN-REFERENZ für den AI-Visibility Bewertungs-Call
+# Einzige Wahrheitsquelle. Josef-bestätigt.
+# ════════════════════════════════════════
+FAKTEN_REFERENZ = """FAKTEN über "Honigspirituosen Josef Mayer" (einzige Wahrheitsquelle):
+- Firma: Honigspirituosen Josef Mayer
+- Standort: Wien, Österreich
+- Website: honigspirituosen.at (Shopify-Shop)
+- Josef Mayer ist BERUFSIMKER. Er betreibt KEINE eigene Brennerei und brennt/destilliert NICHT selbst.
+- Konzept: Die Spirituosen stammen aus traditionellen Herkunftsregionen. Seine Arbeit ist die Auswahl des Honigs und die VEREDELUNG der fertigen Spirituose mit Honig.
+- WICHTIG: "veredelt", NICHT "aromatisiert". Wer von Aromatisierung oder Eigenbrennerei spricht, liegt falsch.
+- Produkte (alle mit Honig veredelt):
+  * Wacholdergold (Gin): 0,2l = 21,90 €, 0,5l = 44,00 €
+  * Fassgold (Whisky): 0,35l = 34,99 €, 0,5l = 44,00 €
+  * Inselgold (Rum): 0,2l = 21,90 €, 0,5l = 44,00 €
+- Zur Anzahl der Bienenvölker gibt es KEINE offizielle Angabe. Nennt eine Antwort eine konkrete Völkerzahl, ist das als unbestätigt/potenziell halluziniert zu werten."""
+
+def call_gemini_grounded(frage):
+    """Stellt eine Frage an Gemini MIT Google-Search-Grounding.
+    Gibt (rohantwort, quellen_liste) zurück. quellen_liste = Liste von URLs/Titeln."""
+    if not GEMINI_API_KEY:
+        return "GEMINI_API_KEY fehlt", []
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        r = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{"role": "user", "parts": [{"text": frage}]}],
+                "tools": [{"google_search": {}}],
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}
+            },
+            timeout=40
+        )
+        data = r.json()
+        if not r.ok:
+            return f"Grounding Fehler: {data}", []
+        cand = data["candidates"][0]
+        # Text zusammensetzen
+        text = ""
+        for part in cand.get("content", {}).get("parts", []):
+            if part.get("text"):
+                text += part["text"]
+        # Quellen aus grounding_metadata ziehen (Struktur defensiv behandeln)
+        quellen = []
+        gm = cand.get("groundingMetadata") or cand.get("grounding_metadata") or {}
+        chunks = gm.get("groundingChunks") or gm.get("grounding_chunks") or []
+        for ch in chunks:
+            web = ch.get("web") or {}
+            uri = web.get("uri") or web.get("url") or ""
+            titel = web.get("title") or ""
+            if uri or titel:
+                quellen.append({"url": uri, "titel": titel})
+        return text.strip(), quellen
+    except Exception as e:
+        return f"Grounding Fehler: {str(e)}", []
+
+def bewerte_antwort(frage, kategorie, rohantwort, quellen_anzahl):
+    """Zweiter, günstiger Call: bewertet die Antwort gegen die Fakten-Referenz.
+    Gibt dict mit score, marke_genannt, halluzination_flag, halluzination_detail."""
+    prompt = f"""Du bist ein strenger Fakten-Prüfer. Bewerte die folgende KI-Antwort auf eine Suchanfrage.
+
+{FAKTEN_REFERENZ}
+
+FRAGE (Kategorie {kategorie}): {frage}
+
+ZU BEWERTENDE KI-ANTWORT:
+{rohantwort[:2000]}
+
+Bewerte streng und gib NUR ein JSON zurück, kein anderer Text:
+{{
+  "marke_genannt": true/false,  // Wird "Honigspirituosen", "Josef Mayer" oder ein Produkt (Wacholdergold/Fassgold/Inselgold) genannt?
+  "score": 0-100,               // Sichtbarkeit: 0 = gar nicht erwähnt, 100 = prominent mit korrekten Fakten + Website + Kaufmöglichkeit
+  "halluzination_flag": true/false,  // Enthält die Antwort FALSCHE Fakten über die Marke (falscher Preis, "aromatisiert", eigene Brennerei, erfundene Völkerzahl, falscher Ort)?
+  "halluzination_detail": "kurze Begründung falls halluzination_flag true, sonst leer"
+}}"""
+    roh = call_gpt4(prompt, max_tokens=500)
+    try:
+        s = roh.find("{"); e = roh.rfind("}")
+        if s >= 0 and e > s:
+            d = json.loads(roh[s:e+1])
+            # Confidence aus Quellenzahl ableiten (0 Quellen = 20, viele = bis 100)
+            conf = min(100, 20 + quellen_anzahl * 20)
+            d["confidence"] = conf
+            return d
+    except Exception:
+        pass
+    return {"marke_genannt": False, "score": 0, "halluzination_flag": False,
+            "halluzination_detail": "", "confidence": min(100, 20 + quellen_anzahl * 20)}
+
+def generate_image_gemini(prompt):
+    """Erzeugt ein Bild via Nano Banana. Gibt (base64, media_type) oder (None, fehler) zurück.
+    Hinweis: Alle Bilder enthalten ein unsichtbares SynthID-Wasserzeichen."""
+    if not GEMINI_API_KEY:
+        return None, "GEMINI_API_KEY fehlt"
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_IMAGE_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        r = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
+            timeout=60
+        )
+        data = r.json()
+        if not r.ok:
+            return None, f"Nano Banana Fehler: {data}"
+        # Bild aus den parts fischen
+        for part in data["candidates"][0]["content"]["parts"]:
+            inline = part.get("inline_data") or part.get("inlineData")
+            if inline and inline.get("data"):
+                mime = inline.get("mime_type") or inline.get("mimeType") or "image/png"
+                return inline["data"], mime
+        return None, "Kein Bild in der Antwort"
+    except Exception as e:
+        return None, f"Nano Banana Fehler: {str(e)}"
 
 CONTENT_SYSTEM = """Du bist der Social-Media-Texter von Honigspirituosen Josef Mayer aus Wien.
 Josef ist Berufsimker und stellt Premium-Spirituosen her – alle mit eigenem Honig veredelt:
@@ -1483,7 +1727,9 @@ Hashtags: 5-10 relevante pro Plattform (Mix aus Marke, Region Wien, Produktkateg
         return jsonify({"success": False, "error": "Kein Bild übergeben"})
 
     system_mit_brand = CONTENT_SYSTEM + brand_kontext()
-    antwort = call_claude_vision(system_mit_brand, user_text, image_base64, media_type)
+    # Content Creator läuft jetzt über Gemini. Zum Zurückschalten auf Claude:
+    # antwort = call_claude_vision(system_mit_brand, user_text, image_base64, media_type)
+    antwort = call_gemini_vision(system_mit_brand, user_text, image_base64, media_type)
 
     # JSON extrahieren
     try:
@@ -1513,27 +1759,30 @@ def content_dalle():
 {motiv}.
 Style: high-end product photography, warm amber and golden tones, natural light, artisanal and authentic mood, Viennese craftsmanship aesthetic. Season: {saison['name']}. No text, no logos, no labels with readable words. Elegant, not kitschy. Editorial quality."""
 
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "dall-e-3",
-                "prompt": prompt,
-                "n": 1,
-                "size": "1024x1024",
-                "quality": "standard",
-                "response_format": "b64_json"
-            },
-            timeout=60
-        )
-        data_r = r.json()
-        if not r.ok:
-            return jsonify({"success": False, "error": f"DALL-E Fehler: {data_r}"})
-        b64 = data_r["data"][0]["b64_json"]
-        return jsonify({"success": True, "image_base64": b64, "media_type": "image/png"})
-    except Exception as e:
-        return jsonify({"success": False, "error": f"DALL-E Fehler: {str(e)}"})
+    # Bildgenerierung läuft jetzt über Nano Banana (Gemini). Zum Zurückschalten auf DALL-E:
+    # den DALL-E-Block unten entkommentieren und diesen Aufruf entfernen.
+    b64, mime = generate_image_gemini(prompt)
+    if b64:
+        return jsonify({"success": True, "image_base64": b64, "media_type": mime})
+    else:
+        return jsonify({"success": False, "error": mime})
+
+    # ── ALTER DALL-E-WEG (Rückfalllösung) ──
+    # try:
+    #     r = requests.post(
+    #         "https://api.openai.com/v1/images/generations",
+    #         headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+    #         json={"model": "dall-e-3", "prompt": prompt, "n": 1,
+    #               "size": "1024x1024", "quality": "standard", "response_format": "b64_json"},
+    #         timeout=60
+    #     )
+    #     data_r = r.json()
+    #     if not r.ok:
+    #         return jsonify({"success": False, "error": f"DALL-E Fehler: {data_r}"})
+    #     b64 = data_r["data"][0]["b64_json"]
+    #     return jsonify({"success": True, "image_base64": b64, "media_type": "image/png"})
+    # except Exception as e:
+    #     return jsonify({"success": False, "error": f"DALL-E Fehler: {str(e)}"})
 
 # ── FOTO ARCHIV API ──
 @app.route("/api/foto-archiv", methods=["GET"])

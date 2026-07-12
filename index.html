@@ -180,6 +180,7 @@
   <div class="tab" onclick="switchTab('prospekt')" id="tab-prospekt">📄 Prospekt</div>
   <div class="tab" onclick="switchTab('maerkte')" id="tab-maerkte">📍 Veranstalter</div>
   <div class="tab" onclick="switchTab('geschenke')" id="tab-geschenke">🎁 Geschenke</div>
+  <div class="tab" onclick="switchTab('aivis')" id="tab-aivis">🔍 AI-Sichtbarkeit</div>
 </div>
 
 <div class="body">
@@ -499,9 +500,13 @@
         <textarea class="ctrl-select" id="wkoText" rows="4" placeholder="Kopierten Text hier einfügen…" style="width:100%;resize:vertical;font-family:inherit"></textarea>
         <div style="font-size:11px;color:var(--smoke);margin:6px 0">Die Branche wird automatisch erkannt und zugeordnet — Feld leer lassen. Nur ausfüllen, wenn du alle einer festen Zielgruppe zuordnen willst.</div>
         <div style="display:flex;gap:6px;margin-top:4px">
-          <input type="text" class="ctrl-select" id="wkoZielgruppe" placeholder="(optional) feste Zielgruppe" style="flex:1">
+          <select class="ctrl-select" id="wkoZielgruppeSelect" onchange="wkoZgWechsel()" style="flex:1">
+            <option value="__auto">🔍 Automatisch erkennen (gemischte Liste)</option>
+            <option value="__custom">✏️ Eigene Branche eingeben…</option>
+          </select>
           <button class="btn btn-dark btn-sm" onclick="wkoImport()" id="wkoBtn">Einlesen</button>
         </div>
+        <input type="text" id="wkoZielgruppe" placeholder="Eigene Branche (z.B. Tierärzte)" class="ctrl-select" style="width:100%;margin-top:6px;display:none">
       </div>
 
       <div class="controls" style="margin-bottom:14px">
@@ -560,6 +565,28 @@
       <div id="geschenkListe"><div class="empty"><div class="empty-icon">🎁</div><h3>Noch keine Geschenk-Leads</h3><p>Wähle Zielgruppen und starte den Scan.</p></div></div>
     </div>
 
+    <!-- ═══ AI-SICHTBARKEIT ═══ -->
+    <div class="panel" id="panel-aivis">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">AI <em>Sichtbarkeit</em></div>
+          <div class="panel-sub">Findet Gemini dich? · Wöchentlicher Check · Halluzinations-Kontrolle</div>
+        </div>
+        <button class="btn btn-dark btn-sm" onclick="aivisScan()" id="aivisBtn">🔍 Scan jetzt</button>
+      </div>
+
+      <div style="font-size:12px;color:var(--amber);margin-bottom:14px;line-height:1.6">
+        Jede Frage wird 3× an Gemini (mit Google-Suche) gestellt. Gemessen wird, ob deine Marke genannt wird (Stabilität 3/3 bis 0/3), wie sichtbar (Score) und ob Falsch-Infos auftauchen.
+      </div>
+
+      <div id="aivisGesamt" style="margin-bottom:16px"></div>
+      <div style="display:flex;gap:6px;margin-bottom:14px">
+        <select class="ctrl-select" id="aivisWoche" onchange="ladeAivis()" style="flex:1"><option value="">Aktuelle Woche</option></select>
+        <button class="btn btn-ghost btn-sm" onclick="ladeAivis()">🔄 Laden</button>
+      </div>
+      <div id="aivisListe"><div class="empty"><div class="empty-icon">🔍</div><h3>Noch kein Scan</h3><p>Klick „Scan jetzt" für den ersten Durchlauf. Dauert ein paar Minuten (15 Fragen × 3).</p></div></div>
+    </div>
+
   </div>
 </div>
 
@@ -582,6 +609,78 @@ function switchTab(tab) {
   if (tab === 'brand') loadBrand();
   if (tab === 'maerkte') loadVeranstalter();
   if (tab === 'geschenke') { ladeZielgruppen(); ladeGeschenkLeads(); }
+  if (tab === 'aivis') { ladeAivisWochen(); ladeAivis(); }
+}
+
+// ── AI SICHTBARKEIT ──
+async function aivisScan() {
+  const btn = document.getElementById('aivisBtn');
+  btn.disabled = true; btn.textContent = '🔍 Läuft… (paar Min)';
+  try {
+    const res = await fetch('/ai-visibility/scan', {method:'POST'});
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Scan fertig: ${data.geprueft} Fragen, ${data.aenderungen.length} Änderungen`);
+      ladeAivisWochen(); ladeAivis();
+    } else showToast(data.error || 'Fehler');
+  } catch(e) { showToast('Fehler: '+e.message); }
+  finally { btn.disabled = false; btn.textContent = '🔍 Scan jetzt'; }
+}
+
+async function ladeAivisWochen() {
+  try {
+    const res = await fetch('/ai-visibility/wochen');
+    const data = await res.json();
+    const sel = document.getElementById('aivisWoche');
+    if (data.wochen && data.wochen.length) {
+      sel.innerHTML = data.wochen.map(w => `<option value="${w}">${w}</option>`).join('');
+    }
+  } catch(e) {}
+}
+
+async function ladeAivis() {
+  try {
+    const woche = document.getElementById('aivisWoche')?.value || '';
+    const res = await fetch('/ai-visibility/ergebnisse' + (woche ? '?woche='+encodeURIComponent(woche) : ''));
+    const data = await res.json();
+    const erg = data.ergebnisse || [];
+    const gBox = document.getElementById('aivisGesamt');
+    if (erg.length) {
+      const farbe = data.gesamt_score >= 50 ? 'var(--gold)' : data.gesamt_score >= 20 ? 'var(--amber)' : '#8B2020';
+      gBox.innerHTML = `<div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+        <div style="font-size:11px;color:var(--smoke);text-transform:uppercase;letter-spacing:.1em">Gesamt-Sichtbarkeit ${data.woche||''}</div>
+        <div style="font-size:38px;font-weight:700;color:${farbe};margin-top:4px">${data.gesamt_score}<span style="font-size:18px;color:var(--smoke)">/100</span></div>
+      </div>`;
+    } else { gBox.innerHTML = ''; }
+    const box = document.getElementById('aivisListe');
+    if (!erg.length) {
+      box.innerHTML = '<div class="empty"><div class="empty-icon">🔍</div><h3>Noch kein Scan</h3><p>Klick „Scan jetzt" für den ersten Durchlauf.</p></div>';
+      return;
+    }
+    // nach Kategorie gruppieren
+    const grp = {};
+    erg.forEach(e => { (grp[e.kategorie||'—'] = grp[e.kategorie||'—']||[]).push(e); });
+    let html = '';
+    Object.keys(grp).forEach(k => {
+      html += `<div style="font-weight:700;font-size:13px;color:var(--gold);margin:14px 0 8px">${k}</div>`;
+      html += grp[k].map(e => {
+        const stabN = parseInt(e.stabilitaet) || 0;
+        const stabFarbe = stabN >= 3 ? 'var(--gold)' : stabN >= 1 ? 'var(--amber)' : 'var(--smoke)';
+        return `<div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+            <div style="font-weight:600;font-size:14px">${e.frage}</div>
+            <div style="text-align:right;white-space:nowrap">
+              <span style="color:${stabFarbe};font-weight:700">${e.stabilitaet}</span>
+              <span style="color:var(--smoke);font-size:12px"> · ${e.score}/100</span>
+            </div>
+          </div>
+          ${e.halluzinationen > 0 ? `<div style="color:#8B2020;font-size:12px;margin-top:4px">⚠️ ${e.halluzinationen}/3 mit Falsch-Info</div>` : ''}
+          ${e.quellen && e.quellen.length ? `<div style="font-size:11px;color:var(--smoke);margin-top:6px">Quellen: ${e.quellen.slice(0,3).map(q=>q.titel||q.url||'?').join(' · ')}</div>` : '<div style="font-size:11px;color:var(--smoke);margin-top:6px">Keine Quellen</div>'}
+        </div>`;
+      }).join('');
+    });
+    box.innerHTML = html;
+  } catch(e) {}
 }
 
 // ── B2B GESCHENKE ──
@@ -604,7 +703,22 @@ async function ladeZielgruppen() {
         const o = document.createElement('option'); o.value = z; o.textContent = z; fz.appendChild(o);
       });
     }
+    // WKO-Import-Dropdown befüllen (feste Branchen vor die Sonderoptionen)
+    const wz = document.getElementById('wkoZielgruppeSelect');
+    if (wz && wz.dataset.gefuellt !== '1') {
+      data.zielgruppen.slice().reverse().forEach(z => {
+        const o = document.createElement('option'); o.value = z; o.textContent = z;
+        wz.insertBefore(o, wz.firstChild);
+      });
+      wz.value = '__auto';
+      wz.dataset.gefuellt = '1';
+    }
   } catch(e) {}
+}
+
+function wkoZgWechsel() {
+  const sel = document.getElementById('wkoZielgruppeSelect').value;
+  document.getElementById('wkoZielgruppe').style.display = (sel === '__custom') ? 'block' : 'none';
 }
 
 function toggleZG(el) {
@@ -614,7 +728,11 @@ function toggleZG(el) {
 
 async function wkoImport() {
   const text = document.getElementById('wkoText').value.trim();
-  const zg = document.getElementById('wkoZielgruppe').value.trim();
+  const sel = document.getElementById('wkoZielgruppeSelect').value;
+  let zg = '';
+  if (sel === '__custom') zg = document.getElementById('wkoZielgruppe').value.trim();
+  else if (sel !== '__auto') zg = sel;
+  // __auto → zg bleibt leer → Backend erkennt automatisch
   if (text.length < 20) { showToast('Bitte Text einfügen'); return; }
   const btn = document.getElementById('wkoBtn');
   btn.disabled = true; btn.textContent = 'Liest…';
