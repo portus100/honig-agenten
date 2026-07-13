@@ -1571,19 +1571,19 @@ GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"  # ← ggf. neueren Namen aus AI S
 # FAKTEN-REFERENZ für den AI-Visibility Bewertungs-Call
 # Einzige Wahrheitsquelle. Josef-bestätigt.
 # ════════════════════════════════════════
-FAKTEN_REFERENZ = """FAKTEN über "Honigspirituosen Josef Mayer" (einzige Wahrheitsquelle):
+FAKTEN_REFERENZ = """FAKTEN über "Honigspirituosen Josef Mayer" (einzige Wahrheitsquelle, geprüft an honigspirituosen.at):
 - Firma: Honigspirituosen Josef Mayer
 - Standort: Wien, Österreich
-- Website: honigspirituosen.at (Shopify-Shop). ACHTUNG: Die Domain endet auf .at, NICHT .de. honigspirituosen.de ist FALSCH.
-- Slogan/Markenclaim: "Du erwartest Süße – du bekommst Charakter" und "Wo Bienen flüstern, entsteht Genuss". KORREKT, nicht als Halluzination werten.
+- Website: honigspirituosen.at (bzw. www.honigspirituosen.at). ACHTUNG: Domain endet auf .at, NIEMALS .de. honigspirituosen.de ist FALSCH und eine Halluzination.
+- Slogan: "Du erwartest Süße? – Du bekommst Charakter!", "Kein Likör – Keine dominierende Süße!", "Wo Bienen flüstern, entsteht Genuss". Alle KORREKT.
 - Josef Mayer ist BERUFSIMKER. Er betreibt KEINE eigene Brennerei und brennt/destilliert NICHT selbst.
-- Konzept: Die fertigen Spirituosen stammen aus traditionellen Herkunftsregionen. Josef veredelt sie mit seinem eigenen Honig. Die Spirituose selbst ist NICHT aus eigener Herstellung, aber der Honig stammt aus eigener Imkerei.
-- "veredelt", NICHT "aromatisiert". Aromatisierung oder eigene Brennerei = FALSCH.
-- Drei Produkte:
+- Konzept: Die fertigen Spirituosen stammen aus traditionellen Herkunftsregionen. Josef VEREDELT sie mit eigenem Honig (aus Wien und Niederösterreich, eigene Imkerei plus ausgewählte Imkerkollegen aus Österreich). Es heißt "veredelt", NICHT "aromatisiert". Eigene Brennerei/Destillerie = FALSCH.
+- Drei Produktlinien:
   * Wacholdergold (Gin): 0,2l = 21,90 €, 0,5l = 44,00 €
-  * Fassgold (Whisky): 0,35l = 34,99 €, 0,5l = 44,00 €
+  * Fassgold (Whisky, ein Scotch Single Malt): 0,35l = 34,90 €, 0,5l = 44,00 €
   * Inselgold (Rum): 0,2l = 21,90 €, 0,5l = 44,00 €
-- Jedes der drei Produkte gibt es in mehreren HONIGSORTEN-Varianten: Lindenhonig, Blütenhonig, Edelkastanienhonig, Waldhonig, Sonnenblumenhonig. Diese Honigsorten sind KORREKT und dürfen NICHT als Halluzination gewertet werden.
+- Alkoholgehalt: 31,5 % Vol. (KORREKT, nicht als Halluzination werten)
+- Jede Produktlinie gibt es in mehreren HONIGSORTEN: Blütenhonig, Edelkastanienhonig, Lindenhonig, Sonnenblumenhonig, Waldhonig. Diese Sorten sind KORREKT und keine Halluzination.
 - Zur Anzahl der Bienenvölker gibt es KEINE offizielle Angabe. Eine konkrete Völkerzahl ist als unbestätigt/potenziell halluziniert zu werten."""
 
 def call_gemini_grounded(frage):
