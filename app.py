@@ -1408,7 +1408,7 @@ def _iso_woche():
 def ai_visibility_scan():
     """Jede aktive Frage 3x mit Grounding, jede Antwort bewerten, alles speichern.
     Änderung ggü. Vorwoche → Telegram."""
-   woche = _iso_woche()
+    woche = _iso_woche()
     alle_fragen = sb_get("ai_visibility_queries", "select=*&aktiv=eq.true&order=id.asc") or []
     if not alle_fragen:
         return jsonify({"success": False, "error": "Keine aktiven Fragen"})
