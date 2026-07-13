@@ -1528,7 +1528,7 @@ def call_claude_vision(system_prompt, user_text, image_base64, media_type="image
 # GEMINI (Bild + Text) für den Content Creator
 # Modellname hier oben leicht änderbar — echten Namen aus Google AI Studio eintragen.
 # ════════════════════════════════════════
-GEMINI_MODEL = "gemini-3-flash"  # ← ggf. aktuellen Namen aus AI Studio eintragen
+GEMINI_MODEL = "gemini-2.5-flash"  # ← ggf. aktuellen Namen aus AI Studio eintragen
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def call_gemini_vision(system_prompt, user_text, image_base64, media_type="image/jpeg"):
