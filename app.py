@@ -1575,13 +1575,16 @@ FAKTEN_REFERENZ = """FAKTEN über "Honigspirituosen Josef Mayer" (einzige Wahrhe
 - Firma: Honigspirituosen Josef Mayer
 - Standort: Wien, Österreich
 - Website: honigspirituosen.at (Shopify-Shop)
+- Slogan/Markenclaim: "Du erwartest Süße – du bekommst Charakter" und "Wo Bienen flüstern, entsteht Genuss". Diese Slogans sind KORREKT und dürfen nicht als Halluzination gewertet werden.
 - Josef Mayer ist BERUFSIMKER. Er betreibt KEINE eigene Brennerei und brennt/destilliert NICHT selbst.
-- Konzept: Die Spirituosen stammen aus traditionellen Herkunftsregionen. Seine Arbeit ist die Auswahl des Honigs und die VEREDELUNG der fertigen Spirituose mit Honig.
-- WICHTIG: "veredelt", NICHT "aromatisiert". Wer von Aromatisierung oder Eigenbrennerei spricht, liegt falsch.
-- Produkte (alle mit Honig veredelt):
+- Konzept (WICHTIG, exakte Formulierung): Die fertigen Spirituosen stammen aus traditionellen Herkunftsregionen. Josef Mayers Arbeit ist die Auswahl des Honigs und die VEREDELUNG dieser Spirituosen mit seinem eigenen Honig. Die Spirituose selbst kommt NICHT aus eigener Herstellung, aber der Honig ist aus eigener Imkerei.
+- "veredelt", NICHT "aromatisiert". Wer von Aromatisierung oder von eigener Brennerei/Destillerie spricht, liegt falsch.
+- Es ist KORREKT zu sagen, dass der Honig aus eigener Imkerei stammt. FALSCH ist nur, wenn behauptet wird, die Spirituose (Gin/Whisky/Rum) selbst werde von ihm gebrannt oder stamme aus eigener Produktion.
+- Produkte (alle drei mit eigenem Honig veredelt, unterschieden nur durch die verwendete Honigsorte):
   * Wacholdergold (Gin): 0,2l = 21,90 €, 0,5l = 44,00 €
   * Fassgold (Whisky): 0,35l = 34,99 €, 0,5l = 44,00 €
   * Inselgold (Rum): 0,2l = 21,90 €, 0,5l = 44,00 €
+- Es gibt KEINE Untersorten mit eigenen Namen – die Produkte unterscheiden sich nur durch die enthaltene Honigsorte.
 - Zur Anzahl der Bienenvölker gibt es KEINE offizielle Angabe. Nennt eine Antwort eine konkrete Völkerzahl, ist das als unbestätigt/potenziell halluziniert zu werten."""
 
 def call_gemini_grounded(frage):
