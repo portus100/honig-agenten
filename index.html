@@ -582,6 +582,7 @@
       <div id="aivisGesamt" style="margin-bottom:16px"></div>
       <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
         <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">📋 Maßnahme dokumentieren</div>
+        <input type="date" id="massnahmeDatum" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <input type="text" id="massnahmeText" placeholder="Was hast du gemacht? (z.B. Schema.org ergänzt)" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <input type="text" id="massnahmeErwartung" placeholder="Erwartung (z.B. bessere Themenautorität)" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <button class="btn btn-dark btn-sm" onclick="massnahmeSpeichern()">Eintragen</button>
@@ -616,7 +617,7 @@ function switchTab(tab) {
   if (tab === 'brand') loadBrand();
   if (tab === 'maerkte') loadVeranstalter();
   if (tab === 'geschenke') { ladeZielgruppen(); ladeGeschenkLeads(); }
-  if (tab === 'aivis') { ladeAivisWochen(); ladeAivis(); ladeMassnahmen();}
+  if (tab === 'aivis') { ladeAivisWochen(); ladeAivis(); ladeMassnahmen(); setMassnahmeDatumHeute(); }
   }
 
 // ── AI SICHTBARKEIT ──
@@ -648,17 +649,24 @@ async function ladeAivisWochen() {
 async function massnahmeSpeichern() {
   const text = document.getElementById('massnahmeText').value.trim();
   const erw = document.getElementById('massnahmeErwartung').value.trim();
+  const datum = document.getElementById('massnahmeDatum').value;
   if (!text) { showToast('Bitte Maßnahme eingeben'); return; }
   try {
     await fetch('/ai-visibility/massnahme', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({massnahme: text, erwartung: erw})
+      body: JSON.stringify({massnahme: text, erwartung: erw, datum: datum})
     });
     document.getElementById('massnahmeText').value = '';
     document.getElementById('massnahmeErwartung').value = '';
+    setMassnahmeDatumHeute();
     showToast('Maßnahme gespeichert');
     ladeMassnahmen();
   } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+function setMassnahmeDatumHeute() {
+  const f = document.getElementById('massnahmeDatum');
+  if (f) f.value = new Date().toISOString().slice(0,10);
 }
 
 async function ladeMassnahmen() {
