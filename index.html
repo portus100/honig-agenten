@@ -588,34 +588,7 @@
         <div id="massnahmenListe" style="margin-top:12px"></div>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:14px">
-        async function massnahmeSpeichern() {
-  const text = document.getElementById('massnahmeText').value.trim();
-  const erw = document.getElementById('massnahmeErwartung').value.trim();
-  if (!text) { showToast('Bitte Maßnahme eingeben'); return; }
-  try {
-    await fetch('/ai-visibility/massnahme', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({massnahme: text, erwartung: erw})
-    });
-    document.getElementById('massnahmeText').value = '';
-    document.getElementById('massnahmeErwartung').value = '';
-    showToast('Maßnahme gespeichert');
-    ladeMassnahmen();
-  } catch(e) { showToast('Fehler: '+e.message); }
-}
-
-async function ladeMassnahmen() {
-  try {
-    const res = await fetch('/ai-visibility/massnahmen');
-    const data = await res.json();
-    const box = document.getElementById('massnahmenListe');
-    if (!data.massnahmen || !data.massnahmen.length) { box.innerHTML = ''; return; }
-    box.innerHTML = data.massnahmen.map(m =>
-      `<div style="font-size:12px;color:var(--smoke);padding:6px 0;border-top:1px solid var(--border)">
-        <strong style="color:var(--paper-text)">${m.datum}</strong> · ${m.massnahme}${m.erwartung ? ' <span style="opacity:.7">→ '+m.erwartung+'</span>' : ''}
-      </div>`).join('');
-  } catch(e) {}
-}        <select class="ctrl-select" id="aivisWoche" onchange="ladeAivis()" style="flex:1"><option value="">Aktuelle Woche</option></select>
+      <select class="ctrl-select" id="aivisWoche" onchange="ladeAivis()" style="flex:1"><option value="">Aktuelle Woche</option></select>
         <button class="btn btn-ghost btn-sm" onclick="ladeAivis()">🔄 Laden</button>
       </div>
       <div id="aivisListe"><div class="empty"><div class="empty-icon">🔍</div><h3>Noch kein Scan</h3><p>Klick „Scan jetzt" für den ersten Durchlauf. Dauert ein paar Minuten (15 Fragen × 3).</p></div></div>
@@ -669,6 +642,35 @@ async function ladeAivisWochen() {
     if (data.wochen && data.wochen.length) {
       sel.innerHTML = data.wochen.map(w => `<option value="${w}">${w}</option>`).join('');
     }
+  } catch(e) {}
+}
+
+async function massnahmeSpeichern() {
+  const text = document.getElementById('massnahmeText').value.trim();
+  const erw = document.getElementById('massnahmeErwartung').value.trim();
+  if (!text) { showToast('Bitte Maßnahme eingeben'); return; }
+  try {
+    await fetch('/ai-visibility/massnahme', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({massnahme: text, erwartung: erw})
+    });
+    document.getElementById('massnahmeText').value = '';
+    document.getElementById('massnahmeErwartung').value = '';
+    showToast('Maßnahme gespeichert');
+    ladeMassnahmen();
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+async function ladeMassnahmen() {
+  try {
+    const res = await fetch('/ai-visibility/massnahmen');
+    const data = await res.json();
+    const box = document.getElementById('massnahmenListe');
+    if (!data.massnahmen || !data.massnahmen.length) { box.innerHTML = ''; return; }
+    box.innerHTML = data.massnahmen.map(m =>
+      `<div style="font-size:12px;color:var(--smoke);padding:6px 0;border-top:1px solid var(--border)">
+        <strong style="color:var(--paper-text)">${m.datum}</strong> · ${m.massnahme}${m.erwartung ? ' <span style="opacity:.7">→ '+m.erwartung+'</span>' : ''}
+      </div>`).join('');
   } catch(e) {}
 }
 
