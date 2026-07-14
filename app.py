@@ -1484,6 +1484,30 @@ def ai_visibility_ergebnisse():
     gesamt = round(sum(e["score"] for e in ergebnis)/len(ergebnis)) if ergebnis else 0
     return jsonify({"success": True, "woche": woche, "gesamt_score": gesamt, "ergebnisse": ergebnis})
 
+@app.route("/ai-visibility/massnahme", methods=["POST"])
+def ai_visibility_massnahme_add():
+    data = request.json or {}
+    massnahme = (data.get("massnahme") or "").strip()
+    if not massnahme:
+        return jsonify({"success": False, "error": "Maßnahme fehlt"})
+    sb_insert("ai_visibility_massnahmen", {
+        "datum": data.get("datum") or datetime.now().strftime("%Y-%m-%d"),
+        "massnahme": massnahme,
+        "erwartung": (data.get("erwartung") or "").strip()
+    })
+    return jsonify({"success": True})
+
+@app.route("/ai-visibility/massnahmen", methods=["GET"])
+def ai_visibility_massnahmen_liste():
+    rows = sb_get("ai_visibility_massnahmen", "select=*&order=datum.desc") or []
+    return jsonify({"success": True, "massnahmen": rows})
+
+@app.route("/ai-visibility/massnahme-loeschen", methods=["POST"])
+def ai_visibility_massnahme_del():
+    data = request.json or {}
+    if data.get("id"):
+        sb_delete("ai_visibility_massnahmen", f"id=eq.{data['id']}")
+    return jsonify({"success": True})
 @app.route("/ai-visibility/wochen", methods=["GET"])
 def ai_visibility_wochen():
     rows = sb_get("ai_visibility_results", "select=woche&order=run_timestamp.desc") or []
