@@ -1501,7 +1501,8 @@ def ai_visibility_massnahme_add():
         "hebel": data.get("hebel") or "",
         "untertyp": (data.get("untertyp") or "").strip(),
         "ziel": (data.get("ziel") or "").strip(),
-        "impact": data.get("impact") or ""
+        "impact": data.get("impact") or "",
+        "faellig_am": data.get("faellig_am") or None
     })
     return jsonify({"success": True})
 

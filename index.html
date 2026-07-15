@@ -647,13 +647,18 @@
             <option value="in_arbeit">🛠 In Arbeit</option>
             <option value="live">✅ Live</option>
           </select>
-          <input type="date" id="geoDatum" class="ctrl-select" style="flex:1">
+          <input type="date" id="geoDatum" class="ctrl-select" style="flex:1" title="Angelegt am">
         </div>
+        <input type="date" id="geoFaellig" class="ctrl-select" style="width:100%;margin-bottom:6px" title="Fällig am (optional)">
         <input type="text" id="geoUrl" placeholder="URL (falls schon live)" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <input type="text" id="geoNotizen" placeholder="Notizen / Erwartung" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <button class="btn btn-dark btn-sm" onclick="geoPipelineSpeichern()">Eintragen</button>
       </div>
 
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="btn btn-dark btn-sm" id="geoViewTodoBtn" onclick="geoViewWechseln('todo')">📝 To-Do-Ansicht</button>
+        <button class="btn btn-ghost btn-sm" id="geoViewAlleBtn" onclick="geoViewWechseln('alle')">📋 Alle Einträge</button>
+      </div>
       <div id="geoPipelineListe"><div class="empty"><div class="empty-icon">🎯</div><h3>Noch keine Einträge</h3><p>Trag den ersten Artikel oder die erste Maßnahme ein.</p></div></div>
     </div>
 
@@ -779,16 +784,18 @@ async function geoPipelineSpeichern() {
   const impact = document.getElementById('geoImpact').value;
   const status = document.getElementById('geoStatus').value;
   const datum = document.getElementById('geoDatum').value;
+  const faellig_am = document.getElementById('geoFaellig').value;
   const url = document.getElementById('geoUrl').value.trim();
   const notizen = document.getElementById('geoNotizen').value.trim();
   if (!titel) { showToast('Bitte Titel eingeben'); return; }
   try {
     await fetch('/ai-visibility/massnahme', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({massnahme: titel, titel, hebel, untertyp, ziel, impact, status, datum, url, erwartung: notizen})
+      body: JSON.stringify({massnahme: titel, titel, hebel, untertyp, ziel, impact, status, datum, faellig_am, url, erwartung: notizen})
     });
     document.getElementById('geoTitel').value = '';
     document.getElementById('geoUrl').value = '';
+    document.getElementById('geoFaellig').value = '';
     document.getElementById('geoNotizen').value = '';
     showToast('Eingetragen');
     ladeGeoPipeline();
@@ -819,13 +826,25 @@ const GEO_HEBEL_LABEL = {'1':'🟢 Eigene Inhalte','2':'🟡 Technisch','3':'�
 
 function geoSterne(n) { n = parseInt(n)||0; return '⭐'.repeat(n) || '–'; }
 
+let geoAktuelleAnsicht = 'todo';
+function geoViewWechseln(ansicht) {
+  geoAktuelleAnsicht = ansicht;
+  document.getElementById('geoViewTodoBtn').className = ansicht === 'todo' ? 'btn btn-dark btn-sm' : 'btn btn-ghost btn-sm';
+  document.getElementById('geoViewAlleBtn').className = ansicht === 'alle' ? 'btn btn-dark btn-sm' : 'btn btn-ghost btn-sm';
+  ladeGeoPipeline();
+}
+
+async function geoSchnellErledigt(id) {
+  await geoStatusAendern(id, 'live');
+}
+
 async function ladeGeoPipeline() {
   const box = document.getElementById('geoPipelineListe');
   const nav = document.getElementById('geoNavigator');
   try {
     const res = await fetch('/ai-visibility/massnahmen');
     const data = await res.json();
-    const rows = data.massnahmen || [];
+    let rows = data.massnahmen || [];
     if (!rows.length) {
       box.innerHTML = '<div class="empty"><div class="empty-icon">🎯</div><h3>Noch keine Einträge</h3><p>Trag den ersten Artikel oder die erste Maßnahme ein.</p></div>';
       nav.innerHTML = 'Noch nichts geplant – trag deinen ersten Eintrag ein.';
@@ -841,17 +860,36 @@ async function ladeGeoPipeline() {
     } else {
       nav.innerHTML = 'Alles Offene ist erledigt oder ohne Hebel-Einschätzung – trag Hebel-Stärke bei neuen Einträgen ein für eine Empfehlung.';
     }
-    const statusLabel = {idee:'💡 Idee', in_arbeit:'🛠 In Arbeit', live:'✅ Live'};
-    box.innerHTML = rows.map(m => `
-      <div style="font-size:12px;color:var(--smoke);padding:8px 0;border-top:1px solid var(--border)">
+
+    const heute = new Date().toISOString().slice(0,10);
+    if (geoAktuelleAnsicht === 'todo') {
+      rows = rows.filter(m => m.status !== 'live');
+      rows.sort((a,b) => {
+        const aUeberfaellig = a.faellig_am && a.faellig_am < heute ? 1 : 0;
+        const bUeberfaellig = b.faellig_am && b.faellig_am < heute ? 1 : 0;
+        if (aUeberfaellig !== bUeberfaellig) return bUeberfaellig - aUeberfaellig;
+        return (parseInt(b.impact)||0) - (parseInt(a.impact)||0);
+      });
+      if (!rows.length) {
+        box.innerHTML = '<div class="empty"><div class="empty-icon">✅</div><h3>Alles erledigt</h3><p>Keine offenen To-Dos – oder schau in „Alle Einträge".</p></div>';
+        return;
+      }
+    }
+
+    box.innerHTML = rows.map(m => {
+      const ueberfaellig = m.faellig_am && m.faellig_am < heute && m.status !== 'live';
+      return `
+      <div style="font-size:12px;color:var(--smoke);padding:8px 0;border-top:1px solid var(--border)${ueberfaellig ? ';border-left:3px solid #8B2020;padding-left:8px' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <div>
             <strong style="color:var(--paper-text)">${m.titel || m.massnahme}</strong>
             <span style="opacity:.7"> · ${GEO_HEBEL_LABEL[m.hebel]||''}${m.untertyp ? ' – '+m.untertyp : ''} · ${geoSterne(m.impact)}</span>
             ${m.ziel ? ` · <span style="opacity:.7">Ziel: ${m.ziel}</span>` : ''}
+            ${m.faellig_am ? ` · <span style="${ueberfaellig ? 'color:#8B2020;font-weight:700' : 'opacity:.7'}">fällig ${m.faellig_am}${ueberfaellig ? ' ⚠️' : ''}</span>` : ''}
             ${m.url ? ` · <a href="${m.url}" target="_blank" style="color:var(--gold)">Link</a>` : ''}
           </div>
           <div style="display:flex;gap:6px;align-items:center">
+            ${m.status !== 'live' ? `<button class="btn btn-dark btn-sm" onclick="geoSchnellErledigt(${m.id})">✅ Erledigt</button>` : ''}
             <select class="ctrl-select" style="font-size:11px;padding:2px 6px" onchange="geoStatusAendern(${m.id}, this.value)">
               <option value="idee" ${m.status==='idee'?'selected':''}>💡 Idee</option>
               <option value="in_arbeit" ${m.status==='in_arbeit'?'selected':''}>🛠 In Arbeit</option>
@@ -861,7 +899,8 @@ async function ladeGeoPipeline() {
           </div>
         </div>
         <div style="margin-top:2px;opacity:.7">${m.datum || ''}${m.erwartung ? ' · → '+m.erwartung : ''}</div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } catch(e) { box.innerHTML = 'Fehler beim Laden.'; }
 }
 
