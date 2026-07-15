@@ -620,7 +620,7 @@
           <option value="5">⚪ 5. Kommunikation – Newsletter etc.</option>
         </select>
 
-        <select class="ctrl-select" id="geoUntertyp" style="width:100%;margin-bottom:6px"></select>
+        <select class="ctrl-select" id="geoUntertyp" style="width:100%;margin-bottom:6px" onchange="geoImpactVorschlagen()"></select>
         <div id="geoHinweis" style="font-size:11px;color:var(--amber);margin-bottom:6px;display:none"></div>
 
         <div style="display:flex;gap:6px;margin-bottom:6px">
@@ -639,6 +639,7 @@
             <option value="1">⭐ minimal</option>
           </select>
         </div>
+        <div style="font-size:10px;color:var(--smoke);margin-top:-4px;margin-bottom:6px">Sterne sind ein Vorschlag basierend auf Typ – passe sie an, wenn du's anders einschätzt.</div>
 
         <div style="display:flex;gap:6px;margin-bottom:6px">
           <select class="ctrl-select" id="geoStatus" style="flex:1">
@@ -717,6 +718,15 @@ const GEO_UNTERTYPEN = {
   '5': ['Newsletter']
 };
 
+// Grobe Einschätzung des Hebels je Untertyp, nach GEO-Erfahrungswerten (nicht in Stein gemeißelt – du kannst jeden Vorschlag überschreiben)
+const GEO_IMPACT_VORSCHLAG = {
+  'Wissensartikel': 5, 'FAQ': 5, 'Vergleichsseite': 4, 'Produktseite': 3, 'Rezept': 3, 'Über-uns/Herstellung': 3,
+  'Schema.org': 4, 'Strukturierte Daten': 4, '.at-Domain': 3, 'Canonical': 2, 'Interne Verlinkung': 2, 'Meta-Daten': 2,
+  'Presse': 5, 'Fachmagazin': 5, 'Verband': 4, 'Branchenverzeichnis': 3, 'Interview': 4, 'Blog eines Dritten': 3,
+  'YouTube': 2, 'Podcast': 2, 'Social Media': 1, 'Reddit': 1, 'Forum': 1,
+  'Newsletter': 1
+};
+
 function geoUntertypAnpassen() {
   const hebel = document.getElementById('geoHebel').value;
   const sel = document.getElementById('geoUntertyp');
@@ -728,6 +738,13 @@ function geoUntertypAnpassen() {
   } else {
     hinweis.style.display = 'none';
   }
+  geoImpactVorschlagen();
+}
+
+function geoImpactVorschlagen() {
+  const untertyp = document.getElementById('geoUntertyp').value;
+  const vorschlag = GEO_IMPACT_VORSCHLAG[untertyp];
+  if (vorschlag) document.getElementById('geoImpact').value = String(vorschlag);
 }
 
 function setGeoDatumHeute() {
