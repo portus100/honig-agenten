@@ -1493,7 +1493,11 @@ def ai_visibility_massnahme_add():
     sb_insert("ai_visibility_massnahmen", {
         "datum": data.get("datum") or datetime.now().strftime("%Y-%m-%d"),
         "massnahme": massnahme,
-        "erwartung": (data.get("erwartung") or "").strip()
+        "erwartung": (data.get("erwartung") or "").strip(),
+        "titel": (data.get("titel") or "").strip(),
+        "status": data.get("status") or "idee",
+        "prioritaet": data.get("prioritaet") or "",
+        "url": (data.get("url") or "").strip()
     })
     return jsonify({"success": True})
 
@@ -1508,6 +1512,32 @@ def ai_visibility_massnahme_del():
     if data.get("id"):
         sb_delete("ai_visibility_massnahmen", f"id=eq.{data['id']}")
     return jsonify({"success": True})
+
+@app.route("/ai-visibility/massnahme-status", methods=["POST"])
+def ai_visibility_massnahme_status():
+    """Status einer Content-Pipeline-Maßnahme ändern (idee → in_arbeit → live), optional URL nachtragen."""
+    data = request.json or {}
+    mid = data.get("id")
+    if not mid:
+        return jsonify({"success": False, "error": "id fehlt"})
+    update = {}
+    if data.get("status"): update["status"] = data["status"]
+    if data.get("url") is not None: update["url"] = (data.get("url") or "").strip()
+    if not update:
+        return jsonify({"success": False, "error": "nichts zu ändern"})
+    sb_update("ai_visibility_massnahmen", f"id=eq.{mid}", update)
+    return jsonify({"success": True})
+@app.route("/ai-visibility/score-verlauf", methods=["GET"])
+def ai_visibility_score_verlauf():
+    """Gesamt-Score pro Woche, kompakt für den GEO/Content-Tab."""
+    rows = sb_get("ai_visibility_results", "select=woche,score&order=woche.asc") or []
+    proWoche = {}
+    for r in rows:
+        proWoche.setdefault(r["woche"], []).append(r.get("score", 0))
+    verlauf = [{"woche": w, "score": round(sum(s)/len(s)) if s else 0}
+               for w, s in sorted(proWoche.items())]
+    return jsonify({"success": True, "verlauf": verlauf[-20:]})
+
 @app.route("/ai-visibility/wochen", methods=["GET"])
 def ai_visibility_wochen():
     rows = sb_get("ai_visibility_results", "select=woche&order=run_timestamp.desc") or []
