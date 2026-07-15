@@ -604,21 +604,50 @@
       </div>
 
       <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:4px">🧭 Nächster Schritt</div>
+        <div id="geoNavigator" style="font-size:12px;color:var(--smoke)">Lädt…</div>
+      </div>
+
+      <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
         <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">➕ Neuer Pipeline-Eintrag</div>
-        <input type="text" id="geoTitel" placeholder="Titel (z.B. Artikel: Was ist Honig-Whisky?)" class="ctrl-select" style="width:100%;margin-bottom:6px">
+        <input type="text" id="geoTitel" placeholder="Titel (z.B. Was ist Honig-Whisky?)" class="ctrl-select" style="width:100%;margin-bottom:6px">
+
+        <select class="ctrl-select" id="geoHebel" style="width:100%;margin-bottom:6px" onchange="geoUntertypAnpassen()">
+          <option value="1">🟢 1. Eigene Inhalte – höchster Hebel</option>
+          <option value="2">🟡 2. Technische Optimierung – Signale</option>
+          <option value="3">🔵 3. Externe Autorität – Vertrauen</option>
+          <option value="4">🟣 4. Community – langfristig</option>
+          <option value="5">⚪ 5. Kommunikation – Newsletter etc.</option>
+        </select>
+
+        <select class="ctrl-select" id="geoUntertyp" style="width:100%;margin-bottom:6px"></select>
+        <div id="geoHinweis" style="font-size:11px;color:var(--amber);margin-bottom:6px;display:none"></div>
+
         <div style="display:flex;gap:6px;margin-bottom:6px">
-          <select class="ctrl-select" id="geoPrioritaet" style="flex:1">
-            <option value="1">Priorität 1 – Themenautorität</option>
-            <option value="2">Priorität 2 – Entitäten/Schema.org</option>
-            <option value="3">Priorität 3 – Externe Bestätigung</option>
+          <select class="ctrl-select" id="geoZiel" style="flex:1">
+            <option value="Themenautorität">Themenautorität</option>
+            <option value="Entität">Entität</option>
+            <option value="Vertrauen">Vertrauen</option>
+            <option value="Produkterkennung">Produkterkennung</option>
+            <option value="Kaufentscheidung">Kaufentscheidung</option>
           </select>
+          <select class="ctrl-select" id="geoImpact" style="flex:1">
+            <option value="5">⭐⭐⭐⭐⭐ sehr hoch</option>
+            <option value="4">⭐⭐⭐⭐ hoch</option>
+            <option value="3">⭐⭐⭐ mittel</option>
+            <option value="2">⭐⭐ gering</option>
+            <option value="1">⭐ minimal</option>
+          </select>
+        </div>
+
+        <div style="display:flex;gap:6px;margin-bottom:6px">
           <select class="ctrl-select" id="geoStatus" style="flex:1">
             <option value="idee">💡 Idee</option>
             <option value="in_arbeit">🛠 In Arbeit</option>
             <option value="live">✅ Live</option>
           </select>
+          <input type="date" id="geoDatum" class="ctrl-select" style="flex:1">
         </div>
-        <input type="date" id="geoDatum" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <input type="text" id="geoUrl" placeholder="URL (falls schon live)" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <input type="text" id="geoNotizen" placeholder="Notizen / Erwartung" class="ctrl-select" style="width:100%;margin-bottom:6px">
         <button class="btn btn-dark btn-sm" onclick="geoPipelineSpeichern()">Eintragen</button>
@@ -680,9 +709,31 @@ async function ladeAivisWochen() {
 }
 
 // ── GEO / CONTENT ──
+const GEO_UNTERTYPEN = {
+  '1': ['Wissensartikel','FAQ','Produktseite','Rezept','Vergleichsseite','Über-uns/Herstellung'],
+  '2': ['Schema.org','Canonical','.at-Domain','Interne Verlinkung','Meta-Daten','Strukturierte Daten'],
+  '3': ['Presse','Fachmagazin','Branchenverzeichnis','Verband','Blog eines Dritten','Interview'],
+  '4': ['Social Media','YouTube','Podcast','Reddit','Forum'],
+  '5': ['Newsletter']
+};
+
+function geoUntertypAnpassen() {
+  const hebel = document.getElementById('geoHebel').value;
+  const sel = document.getElementById('geoUntertyp');
+  sel.innerHTML = (GEO_UNTERTYPEN[hebel] || []).map(t => `<option value="${t}">${t}</option>`).join('');
+  const hinweis = document.getElementById('geoHinweis');
+  if (hebel === '5') {
+    hinweis.style.display = 'block';
+    hinweis.textContent = '📬 Kein direkter GEO-Effekt. Höherer Nutzen, wenn zusätzlich als öffentliche Archivseite veröffentlicht.';
+  } else {
+    hinweis.style.display = 'none';
+  }
+}
+
 function setGeoDatumHeute() {
   const f = document.getElementById('geoDatum');
   if (f && !f.value) f.value = new Date().toISOString().slice(0,10);
+  if (!document.getElementById('geoUntertyp').options.length) geoUntertypAnpassen();
 }
 
 async function ladeGeoScoreVerlauf() {
@@ -705,7 +756,10 @@ async function ladeGeoScoreVerlauf() {
 
 async function geoPipelineSpeichern() {
   const titel = document.getElementById('geoTitel').value.trim();
-  const prioritaet = document.getElementById('geoPrioritaet').value;
+  const hebel = document.getElementById('geoHebel').value;
+  const untertyp = document.getElementById('geoUntertyp').value;
+  const ziel = document.getElementById('geoZiel').value;
+  const impact = document.getElementById('geoImpact').value;
   const status = document.getElementById('geoStatus').value;
   const datum = document.getElementById('geoDatum').value;
   const url = document.getElementById('geoUrl').value.trim();
@@ -714,7 +768,7 @@ async function geoPipelineSpeichern() {
   try {
     await fetch('/ai-visibility/massnahme', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({massnahme: titel, titel, prioritaet, status, datum, url, erwartung: notizen})
+      body: JSON.stringify({massnahme: titel, titel, hebel, untertyp, ziel, impact, status, datum, url, erwartung: notizen})
     });
     document.getElementById('geoTitel').value = '';
     document.getElementById('geoUrl').value = '';
@@ -744,24 +798,40 @@ async function geoPipelineLoeschen(id) {
   } catch(e) { showToast('Fehler: '+e.message); }
 }
 
+const GEO_HEBEL_LABEL = {'1':'🟢 Eigene Inhalte','2':'🟡 Technisch','3':'🔵 Extern','4':'🟣 Community','5':'⚪ Kommunikation'};
+
+function geoSterne(n) { n = parseInt(n)||0; return '⭐'.repeat(n) || '–'; }
+
 async function ladeGeoPipeline() {
   const box = document.getElementById('geoPipelineListe');
+  const nav = document.getElementById('geoNavigator');
   try {
     const res = await fetch('/ai-visibility/massnahmen');
     const data = await res.json();
     const rows = data.massnahmen || [];
     if (!rows.length) {
       box.innerHTML = '<div class="empty"><div class="empty-icon">🎯</div><h3>Noch keine Einträge</h3><p>Trag den ersten Artikel oder die erste Maßnahme ein.</p></div>';
+      nav.innerHTML = 'Noch nichts geplant – trag deinen ersten Eintrag ein.';
       return;
     }
+    // Navigator: höchste Hebel-Stärke unter den offenen Ideen
+    const offen = rows.filter(m => m.status !== 'live' && m.impact);
+    offen.sort((a,b) => (parseInt(b.impact)||0) - (parseInt(a.impact)||0));
+    if (offen.length) {
+      const top = offen[0];
+      nav.innerHTML = `Wenn du heute nur Zeit für eins hast: <strong style="color:var(--paper-text)">${top.titel || top.massnahme}</strong>
+        <span style="opacity:.7">(${GEO_HEBEL_LABEL[top.hebel]||''} · ${geoSterne(top.impact)} · Ziel: ${top.ziel||'–'})</span>`;
+    } else {
+      nav.innerHTML = 'Alles Offene ist erledigt oder ohne Hebel-Einschätzung – trag Hebel-Stärke bei neuen Einträgen ein für eine Empfehlung.';
+    }
     const statusLabel = {idee:'💡 Idee', in_arbeit:'🛠 In Arbeit', live:'✅ Live'};
-    const prioLabel = {'1':'P1 Themenautorität','2':'P2 Entitäten','3':'P3 Extern'};
     box.innerHTML = rows.map(m => `
       <div style="font-size:12px;color:var(--smoke);padding:8px 0;border-top:1px solid var(--border)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <div>
             <strong style="color:var(--paper-text)">${m.titel || m.massnahme}</strong>
-            <span style="opacity:.7"> · ${m.datum || ''} · ${prioLabel[m.prioritaet] || ''}</span>
+            <span style="opacity:.7"> · ${GEO_HEBEL_LABEL[m.hebel]||''}${m.untertyp ? ' – '+m.untertyp : ''} · ${geoSterne(m.impact)}</span>
+            ${m.ziel ? ` · <span style="opacity:.7">Ziel: ${m.ziel}</span>` : ''}
             ${m.url ? ` · <a href="${m.url}" target="_blank" style="color:var(--gold)">Link</a>` : ''}
           </div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -773,7 +843,7 @@ async function ladeGeoPipeline() {
             <button class="btn btn-ghost btn-sm" onclick="geoPipelineLoeschen(${m.id})">🗑</button>
           </div>
         </div>
-        ${m.erwartung ? `<div style="margin-top:2px;opacity:.7">→ ${m.erwartung}</div>` : ''}
+        <div style="margin-top:2px;opacity:.7">${m.datum || ''}${m.erwartung ? ' · → '+m.erwartung : ''}</div>
       </div>`).join('');
   } catch(e) { box.innerHTML = 'Fehler beim Laden.'; }
 }

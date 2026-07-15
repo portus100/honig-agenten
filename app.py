@@ -1497,7 +1497,11 @@ def ai_visibility_massnahme_add():
         "titel": (data.get("titel") or "").strip(),
         "status": data.get("status") or "idee",
         "prioritaet": data.get("prioritaet") or "",
-        "url": (data.get("url") or "").strip()
+        "url": (data.get("url") or "").strip(),
+        "hebel": data.get("hebel") or "",
+        "untertyp": (data.get("untertyp") or "").strip(),
+        "ziel": (data.get("ziel") or "").strip(),
+        "impact": data.get("impact") or ""
     })
     return jsonify({"success": True})
 
