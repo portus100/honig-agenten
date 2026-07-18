@@ -708,14 +708,7 @@
         <span id="rezGenStatus" style="font-size:12px;color:var(--smoke);margin-left:8px"></span>
       </div>
 
-      <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
-        <button class="btn btn-dark btn-sm" id="rezFilterAlle" onclick="rezeptFilterSetzen('')">📋 Alle</button>
-        <button class="btn btn-ghost btn-sm" id="rezFilterWacholdergold" onclick="rezeptFilterSetzen('Wacholdergold')">Wacholdergold</button>
-        <button class="btn btn-ghost btn-sm" id="rezFilterFassgold" onclick="rezeptFilterSetzen('Fassgold')">Fassgold</button>
-        <button class="btn btn-ghost btn-sm" id="rezFilterInselgold" onclick="rezeptFilterSetzen('Inselgold')">Inselgold</button>
-      </div>
-
-      <div id="rezepteListe"><div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div></div>
+      <div id="rezepteListe"><div class="empty"><div class="empty-icon">🍸</div><h3>Lädt…</h3></div></div>
     </div>
 
   </div>
@@ -1047,15 +1040,10 @@ function rezToArray(v) {
   return [];
 }
 
-let rezeptAktuellerFilter = '';
+let rezeptAktuellerFilter = null; // null = Ordner-Übersicht, 'alle' = flache Liste, Name = gefiltert
 
 function rezeptFilterSetzen(spirituose) {
   rezeptAktuellerFilter = spirituose;
-  ['', 'Wacholdergold', 'Fassgold', 'Inselgold'].forEach(s => {
-    const id = 'rezFilter' + (s || 'Alle');
-    const btn = document.getElementById(id);
-    if (btn) btn.className = (s === spirituose) ? 'btn btn-dark btn-sm' : 'btn btn-ghost btn-sm';
-  });
   ladeRezepte();
 }
 
@@ -1064,30 +1052,55 @@ async function ladeRezepte() {
   try {
     const res = await fetch('/rezept/liste');
     const data = await res.json();
-    let rows = data.rezepte || [];
+    const alleRows = data.rezepte || [];
 
-    // Anzahl pro Spirituose auf den Filter-Buttons anzeigen
-    const zaehlung = {Wacholdergold: 0, Fassgold: 0, Inselgold: 0};
-    rows.forEach(r => { if (zaehlung[r.spirituose] !== undefined) zaehlung[r.spirituose]++; });
-    const alleBtn = document.getElementById('rezFilterAlle');
-    if (alleBtn) alleBtn.textContent = `📋 Alle (${rows.length})`;
-    ['Wacholdergold', 'Fassgold', 'Inselgold'].forEach(s => {
-      const btn = document.getElementById('rezFilter' + s);
-      if (btn) btn.textContent = `${s} (${zaehlung[s]})`;
-    });
-
-    if (rezeptAktuellerFilter) {
-      rows = rows.filter(r => r.spirituose === rezeptAktuellerFilter);
-    }
-
-    if (!rows.length) {
-      box.innerHTML = rezeptAktuellerFilter
-        ? `<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte für ${rezeptAktuellerFilter}</h3><p>Generiere gezielt welche über die Auswahl oben im Formular.</p></div>`
-        : '<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div>';
+    if (!alleRows.length) {
+      box.innerHTML = '<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div>';
       return;
     }
-    const statusFarbe = {idee:'var(--smoke)', getestet:'var(--gold)', verworfen:'#8B2020', veroeffentlicht:'var(--gold)'};
-    box.innerHTML = rows.map(r => {
+
+    // ── Ordner-Übersicht (Startzustand) ──
+    if (rezeptAktuellerFilter === null) {
+      const zaehlung = {Wacholdergold: 0, Fassgold: 0, Inselgold: 0, Sonstige: 0};
+      alleRows.forEach(r => {
+        if (zaehlung[r.spirituose] !== undefined) zaehlung[r.spirituose]++;
+        else zaehlung['Sonstige']++;
+      });
+      const ordnerIcons = {Wacholdergold: '🍸', Fassgold: '🥃', Inselgold: '🏝️', Sonstige: '📦'};
+      let html = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
+      ['Wacholdergold', 'Fassgold', 'Inselgold'].forEach(s => {
+        html += `<div onclick="rezeptFilterSetzen('${s}')" style="cursor:pointer;background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:18px;flex:1;min-width:140px;text-align:center" onmouseover="this.style.opacity=0.8" onmouseout="this.style.opacity=1">
+          <div style="font-size:28px">${ordnerIcons[s]}</div>
+          <div style="font-weight:700;color:var(--paper-text);margin-top:6px">${s}</div>
+          <div style="font-size:12px;color:var(--smoke)">${zaehlung[s]} Rezept${zaehlung[s]===1?'':'e'}</div>
+        </div>`;
+      });
+      html += '</div>';
+      if (zaehlung['Sonstige'] > 0) {
+        html += `<div onclick="rezeptFilterSetzen('Sonstige')" style="cursor:pointer;font-size:12px;color:var(--smoke);text-align:center;margin-bottom:8px">📦 ${zaehlung['Sonstige']} sonstige Rezepte ohne klare Spirituose ansehen</div>`;
+      }
+      html += `<div style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="rezeptFilterSetzen('alle')">📋 Alle ${alleRows.length} Rezepte auf einmal anzeigen</button></div>`;
+      box.innerHTML = html;
+      return;
+    }
+
+    // ── Gefilterte / volle Liste, komplett aufgeklappt ──
+    let rows = alleRows;
+    if (rezeptAktuellerFilter === 'Sonstige') {
+      rows = alleRows.filter(r => !['Wacholdergold','Fassgold','Inselgold'].includes(r.spirituose));
+    } else if (rezeptAktuellerFilter !== 'alle') {
+      rows = alleRows.filter(r => r.spirituose === rezeptAktuellerFilter);
+    }
+
+    const zurueckBtn = `<button class="btn btn-ghost btn-sm" onclick="rezeptFilterSetzen(null)" style="margin-bottom:12px">⬅ Zurück zur Übersicht</button>`;
+
+    if (!rows.length) {
+      box.innerHTML = zurueckBtn + `<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte hier</h3></div>`;
+      return;
+    }
+
+    const statusEmoji = {idee:'💡', getestet:'✅', verworfen:'❌', veroeffentlicht:'📤'};
+    const karten = rows.map(r => {
       const zutaten = rezToArray(r.zutaten);
       const zubereitung = rezToArray(r.zubereitung);
       const typBadge = r.typ === 'klassiker' ? '🍹 Klassiker' : (r.typ === 'kreation' ? '✨ Kreation' : '');
@@ -1095,7 +1108,7 @@ async function ladeRezepte() {
       <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
           <div style="flex:1;min-width:200px">
-            <div style="font-weight:700;font-size:15px;color:var(--paper-text)">${r.titel}</div>
+            <div style="font-weight:700;font-size:15px;color:var(--paper-text)">${statusEmoji[r.status]||'💡'} ${r.titel}</div>
             <div style="font-size:11px;color:var(--smoke);margin-top:2px">
               ${r.spirituose || ''}${r.honigsorte ? ' · '+r.honigsorte+' Honig' : ''} ${typBadge ? '· '+typBadge : ''}
             </div>
@@ -1130,8 +1143,11 @@ async function ladeRezepte() {
         </div>
       </div>`;
     }).join('');
+
+    box.innerHTML = zurueckBtn + karten;
   } catch(e) { box.innerHTML = 'Fehler beim Laden.'; }
 }
+
 
 async function ladeAivis() {
   try {
