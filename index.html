@@ -708,6 +708,13 @@
         <span id="rezGenStatus" style="font-size:12px;color:var(--smoke);margin-left:8px"></span>
       </div>
 
+      <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+        <button class="btn btn-dark btn-sm" id="rezFilterAlle" onclick="rezeptFilterSetzen('')">📋 Alle</button>
+        <button class="btn btn-ghost btn-sm" id="rezFilterWacholdergold" onclick="rezeptFilterSetzen('Wacholdergold')">Wacholdergold</button>
+        <button class="btn btn-ghost btn-sm" id="rezFilterFassgold" onclick="rezeptFilterSetzen('Fassgold')">Fassgold</button>
+        <button class="btn btn-ghost btn-sm" id="rezFilterInselgold" onclick="rezeptFilterSetzen('Inselgold')">Inselgold</button>
+      </div>
+
       <div id="rezepteListe"><div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div></div>
     </div>
 
@@ -1040,14 +1047,43 @@ function rezToArray(v) {
   return [];
 }
 
+let rezeptAktuellerFilter = '';
+
+function rezeptFilterSetzen(spirituose) {
+  rezeptAktuellerFilter = spirituose;
+  ['', 'Wacholdergold', 'Fassgold', 'Inselgold'].forEach(s => {
+    const id = 'rezFilter' + (s || 'Alle');
+    const btn = document.getElementById(id);
+    if (btn) btn.className = (s === spirituose) ? 'btn btn-dark btn-sm' : 'btn btn-ghost btn-sm';
+  });
+  ladeRezepte();
+}
+
 async function ladeRezepte() {
   const box = document.getElementById('rezepteListe');
   try {
     const res = await fetch('/rezept/liste');
     const data = await res.json();
-    const rows = data.rezepte || [];
+    let rows = data.rezepte || [];
+
+    // Anzahl pro Spirituose auf den Filter-Buttons anzeigen
+    const zaehlung = {Wacholdergold: 0, Fassgold: 0, Inselgold: 0};
+    rows.forEach(r => { if (zaehlung[r.spirituose] !== undefined) zaehlung[r.spirituose]++; });
+    const alleBtn = document.getElementById('rezFilterAlle');
+    if (alleBtn) alleBtn.textContent = `📋 Alle (${rows.length})`;
+    ['Wacholdergold', 'Fassgold', 'Inselgold'].forEach(s => {
+      const btn = document.getElementById('rezFilter' + s);
+      if (btn) btn.textContent = `${s} (${zaehlung[s]})`;
+    });
+
+    if (rezeptAktuellerFilter) {
+      rows = rows.filter(r => r.spirituose === rezeptAktuellerFilter);
+    }
+
     if (!rows.length) {
-      box.innerHTML = '<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div>';
+      box.innerHTML = rezeptAktuellerFilter
+        ? `<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte für ${rezeptAktuellerFilter}</h3><p>Generiere gezielt welche über die Auswahl oben im Formular.</p></div>`
+        : '<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div>';
       return;
     }
     const statusFarbe = {idee:'var(--smoke)', getestet:'var(--gold)', verworfen:'#8B2020', veroeffentlicht:'var(--gold)'};
