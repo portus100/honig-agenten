@@ -1872,6 +1872,139 @@ def foto_notiz():
 
 
 # ════════════════════════════════════════
+# REZEPT AGENT
+# ════════════════════════════════════════
+
+REZEPT_SPIRITUOSEN = {
+    "Wacholdergold": "Gin, mit Honig veredelt",
+    "Fassgold": "Whisky (Scotch Single Malt), mit Honig veredelt",
+    "Inselgold": "Rum, mit Honig veredelt",
+}
+REZEPT_HONIGSORTEN = ["Wald", "Frühjahrsblüte", "Kastanie", "Linde", "Sonnenblume", "Buchweizen"]
+
+def rezept_generieren(anzahl=3, spirituose=None, honigsorte=None, typ=None):
+    """Generiert mehrere Cocktail-Rezepte via Claude. Vermeidet Duplikate anhand vorhandener Titel."""
+    # Vorhandene Rezepte laden, um Doppelte zu vermeiden
+    vorhanden = sb_get("rezepte", "select=titel,spirituose,honigsorte&order=erstellt_am.desc&limit=100") or []
+    schon_da = "; ".join(f"{r.get('titel')} ({r.get('spirituose')}/{r.get('honigsorte')})" for r in vorhanden) or "noch keine"
+
+    vorgabe = ""
+    if spirituose:
+        vorgabe += f"\nVerwende als Basis-Spirituose: {spirituose} ({REZEPT_SPIRITUOSEN.get(spirituose, '')})."
+    else:
+        vorgabe += "\nWähle pro Rezept selbst eine der drei Spirituosen (Wacholdergold=Gin, Fassgold=Whisky, Inselgold=Rum)."
+    if honigsorte:
+        vorgabe += f"\nDie verwendete Honigsorte ist: {honigsorte}."
+    if typ == "klassiker":
+        vorgabe += "\nLege bekannte Cocktail-Klassiker auf die jeweilige Honigspirituose um (z.B. Whisky Sour, Gin Tonic, Dark & Stormy)."
+    elif typ == "kreation":
+        vorgabe += "\nErfinde eigenständige neue Kreationen, die zur Honignote passen."
+    else:
+        vorgabe += "\nMische Klassiker-Adaptionen und eigenständige neue Kreationen."
+
+    system_prompt = """Du bist Cocktail-Entwickler für Honigspirituosen Josef Mayer in Wien.
+Die drei Produkte sind mit echtem Honig veredelt und bewusst NICHT süß, sondern charaktervoll – Claim: "Du erwartest Süße – du bekommst Charakter."
+Wichtig: Die Honignote soll im Cocktail erkennbar bleiben, nicht von süßen Mixern überdeckt werden. Bevorzuge daher eher trockene, nicht zu süße Begleiter.
+Deine Rezepte müssen realistisch mixbar sein mit üblichen Bar-Zutaten. Mengenangaben in cl oder Stück. Keine erfundenen Zutaten."""
+
+    user_msg = f"""Erstelle {anzahl} verschiedene Cocktail-Rezepte.{vorgabe}
+
+Diese Rezepte gibt es schon – erstelle KEINE davon nochmal, auch keine sehr ähnlichen:
+{schon_da}
+
+Antworte NUR mit einem JSON-Array, kein anderer Text. Format pro Rezept:
+{{"titel": "Name des Cocktails", "spirituose": "Wacholdergold|Fassgold|Inselgold", "honigsorte": "eine der Sorten oder leer", "typ": "klassiker|kreation", "beschreibung": "1-2 Sätze worum es geht", "zutaten": ["4 cl ...", "2 cl ...", "..."], "zubereitung": ["Schritt 1", "Schritt 2", "..."], "glas": "Glasempfehlung"}}"""
+
+    antwort = call_claude(system_prompt, user_msg)
+    try:
+        json_match = re.search(r'\[.*\]', antwort, re.DOTALL)
+        rezepte = json.loads(json_match.group()) if json_match else []
+    except Exception:
+        rezepte = []
+    return rezepte
+
+@app.route("/rezept/generieren", methods=["POST"])
+def rezept_generieren_route():
+    data = request.json or {}
+    anzahl = min(int(data.get("anzahl", 3)), 5)
+    spirituose = data.get("spirituose") or None
+    honigsorte = data.get("honigsorte") or None
+    typ = data.get("typ") or None
+
+    rezepte = rezept_generieren(anzahl, spirituose, honigsorte, typ)
+    if not rezepte:
+        return jsonify({"success": False, "error": "Keine Rezepte generiert – bitte nochmal versuchen."})
+
+    gespeichert = []
+    for r in rezepte:
+        eintrag = {
+            "titel": (r.get("titel") or "Unbenannt").strip(),
+            "spirituose": r.get("spirituose") or "",
+            "honigsorte": r.get("honigsorte") or "",
+            "typ": r.get("typ") or "",
+            "beschreibung": r.get("beschreibung") or "",
+            "zutaten": r.get("zutaten") or [],
+            "zubereitung": r.get("zubereitung") or [],
+            "glas": r.get("glas") or "",
+            "status": "idee"
+        }
+        sb_insert("rezepte", eintrag)
+        gespeichert.append(eintrag)
+    return jsonify({"success": True, "rezepte": gespeichert, "anzahl": len(gespeichert)})
+
+@app.route("/rezept/liste", methods=["GET"])
+def rezept_liste():
+    rows = sb_get("rezepte", "select=*&order=erstellt_am.desc") or []
+    return jsonify({"success": True, "rezepte": rows})
+
+@app.route("/rezept/status", methods=["POST"])
+def rezept_status():
+    data = request.json or {}
+    rid = data.get("id")
+    if not rid:
+        return jsonify({"success": False, "error": "id fehlt"})
+    update = {}
+    if data.get("status"): update["status"] = data["status"]
+    if data.get("notiz") is not None: update["notiz"] = data.get("notiz") or ""
+    if update:
+        sb_update("rezepte", f"id=eq.{rid}", update)
+    return jsonify({"success": True})
+
+@app.route("/rezept/loeschen", methods=["POST"])
+def rezept_loeschen():
+    data = request.json or {}
+    if data.get("id"):
+        sb_delete("rezepte", f"id=eq.{data['id']}")
+    return jsonify({"success": True})
+
+@app.route("/rezept/blog-entwurf", methods=["POST"])
+def rezept_blog_entwurf():
+    """Formatiert ein gespeichertes Rezept als Markdown-Entwurf für den Rezepte-Blog."""
+    data = request.json or {}
+    rid = data.get("id")
+    rows = sb_get("rezepte", f"select=*&id=eq.{rid}") or []
+    if not rows:
+        return jsonify({"success": False, "error": "Rezept nicht gefunden"})
+    r = rows[0]
+    zutaten = r.get("zutaten") or []
+    zubereitung = r.get("zubereitung") or []
+    if isinstance(zutaten, str):
+        try: zutaten = json.loads(zutaten)
+        except: zutaten = [zutaten]
+    if isinstance(zubereitung, str):
+        try: zubereitung = json.loads(zubereitung)
+        except: zubereitung = [zubereitung]
+
+    md = f"# {r.get('titel')}\n\n{r.get('beschreibung','')}\n\n"
+    md += "## Zutaten\n\n" + "\n".join(f"- {z}" for z in zutaten) + "\n\n"
+    md += "## Zubereitung\n\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(zubereitung)) + "\n\n"
+    if r.get("glas"):
+        md += f"**Glas:** {r.get('glas')}\n\n"
+    md += "---\n\n**Aus der Imker-Werkstatt**\nJosef Mayer ist Berufsimker und entwickelt Honigspirituosen, bei denen die Eigenschaften verschiedener Honigsorten bewusst mit Gin, Whisky und Rum kombiniert werden."
+    return jsonify({"success": True, "markdown": md, "zutaten": zutaten, "zubereitung": zubereitung})
+
+
+# ════════════════════════════════════════
 # PROSPEKT AGENT
 # Erstellt druckfertige PDFs für verschiedene Zielgruppen
 # ════════════════════════════════════════

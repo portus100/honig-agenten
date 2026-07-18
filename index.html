@@ -182,6 +182,7 @@
   <div class="tab" onclick="switchTab('geschenke')" id="tab-geschenke">🎁 Geschenke</div>
   <div class="tab" onclick="switchTab('aivis')" id="tab-aivis">🔍 AI-Sichtbarkeit</div>
   <div class="tab" onclick="switchTab('geo')" id="tab-geo">🎯 GEO/Content</div>
+  <div class="tab" onclick="switchTab('rezepte')" id="tab-rezepte">🍸 Rezepte</div>
 </div>
 
 <div class="body">
@@ -662,6 +663,54 @@
       <div id="geoPipelineListe"><div class="empty"><div class="empty-icon">🎯</div><h3>Noch keine Einträge</h3><p>Trag den ersten Artikel oder die erste Maßnahme ein.</p></div></div>
     </div>
 
+    <!-- ═══ REZEPTE ═══ -->
+    <div class="panel" id="panel-rezepte">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Rezepte <em>/ Cocktail-Ideen</em></div>
+          <div class="panel-sub">Ideen zum Ausprobieren – teste sie, notiere was funktioniert, mach daraus Blog-Entwürfe</div>
+        </div>
+      </div>
+
+      <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">✨ Neue Rezepte generieren</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+          <select class="ctrl-select" id="rezSpirituose" style="flex:1;min-width:120px">
+            <option value="">Spirituose: egal</option>
+            <option value="Wacholdergold">Wacholdergold (Gin)</option>
+            <option value="Fassgold">Fassgold (Whisky)</option>
+            <option value="Inselgold">Inselgold (Rum)</option>
+          </select>
+          <select class="ctrl-select" id="rezHonig" style="flex:1;min-width:120px">
+            <option value="">Honigsorte: egal</option>
+            <option value="Wald">Wald</option>
+            <option value="Frühjahrsblüte">Frühjahrsblüte</option>
+            <option value="Kastanie">Kastanie</option>
+            <option value="Linde">Linde</option>
+            <option value="Sonnenblume">Sonnenblume</option>
+            <option value="Buchweizen">Buchweizen</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+          <select class="ctrl-select" id="rezTyp" style="flex:1;min-width:120px">
+            <option value="">Klassiker & Kreationen gemischt</option>
+            <option value="klassiker">Nur Klassiker-Adaptionen</option>
+            <option value="kreation">Nur neue Kreationen</option>
+          </select>
+          <select class="ctrl-select" id="rezAnzahl" style="flex:1;min-width:80px">
+            <option value="3">3 Rezepte</option>
+            <option value="2">2 Rezepte</option>
+            <option value="4">4 Rezepte</option>
+            <option value="5">5 Rezepte</option>
+          </select>
+        </div>
+        <button class="btn btn-dark btn-sm" id="rezGenBtn" onclick="rezepteGenerieren()">✨ Generieren</button>
+        <span id="rezGenStatus" style="font-size:12px;color:var(--smoke);margin-left:8px"></span>
+      </div>
+
+      <div id="rezepteListe"><div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div></div>
+    </div>
+
   </div>
 </div>
 
@@ -686,6 +735,7 @@ function switchTab(tab) {
   if (tab === 'geschenke') { ladeZielgruppen(); ladeGeschenkLeads(); }
   if (tab === 'aivis') { ladeAivisWochen(); ladeAivis(); }
   if (tab === 'geo') { ladeGeoScoreVerlauf(); ladeGeoPipeline(); setGeoDatumHeute(); }
+  if (tab === 'rezepte') { ladeRezepte(); }
   }
 
 // ── AI SICHTBARKEIT ──
@@ -899,6 +949,149 @@ async function ladeGeoPipeline() {
           </div>
         </div>
         <div style="margin-top:2px;opacity:.7">${m.datum || ''}${m.erwartung ? ' · → '+m.erwartung : ''}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { box.innerHTML = 'Fehler beim Laden.'; }
+}
+
+// ── REZEPTE ──
+async function rezepteGenerieren() {
+  const btn = document.getElementById('rezGenBtn');
+  const status = document.getElementById('rezGenStatus');
+  btn.disabled = true;
+  status.textContent = 'Generiere… (dauert ein paar Sekunden)';
+  try {
+    const res = await fetch('/rezept/generieren', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        anzahl: document.getElementById('rezAnzahl').value,
+        spirituose: document.getElementById('rezSpirituose').value,
+        honigsorte: document.getElementById('rezHonig').value,
+        typ: document.getElementById('rezTyp').value
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = `${data.anzahl} neue Rezepte erstellt`;
+      ladeRezepte();
+    } else {
+      status.textContent = data.error || 'Fehler';
+    }
+  } catch(e) {
+    status.textContent = 'Fehler: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { status.textContent = ''; }, 4000);
+  }
+}
+
+async function rezeptStatus(id, status) {
+  try {
+    await fetch('/rezept/status', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, status})
+    });
+    ladeRezepte();
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+async function rezeptNotiz(id, notiz) {
+  try {
+    await fetch('/rezept/status', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, notiz})
+    });
+    showToast('Notiz gespeichert');
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+async function rezeptLoeschen(id) {
+  if (!confirm('Dieses Rezept wirklich löschen?')) return;
+  try {
+    await fetch('/rezept/loeschen', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id})
+    });
+    ladeRezepte();
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+async function rezeptBlogEntwurf(id) {
+  try {
+    const res = await fetch('/rezept/blog-entwurf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id})
+    });
+    const data = await res.json();
+    if (data.success) {
+      navigator.clipboard.writeText(data.markdown).then(
+        () => showToast('Blog-Entwurf in die Zwischenablage kopiert'),
+        () => { prompt('Blog-Entwurf (kopieren):', data.markdown); }
+      );
+    } else {
+      showToast(data.error || 'Fehler');
+    }
+  } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+function rezToArray(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') { try { return JSON.parse(v); } catch(e) { return [v]; } }
+  return [];
+}
+
+async function ladeRezepte() {
+  const box = document.getElementById('rezepteListe');
+  try {
+    const res = await fetch('/rezept/liste');
+    const data = await res.json();
+    const rows = data.rezepte || [];
+    if (!rows.length) {
+      box.innerHTML = '<div class="empty"><div class="empty-icon">🍸</div><h3>Noch keine Rezepte</h3><p>Generiere deine ersten Cocktail-Ideen zum Ausprobieren.</p></div>';
+      return;
+    }
+    const statusFarbe = {idee:'var(--smoke)', getestet:'var(--gold)', verworfen:'#8B2020', veroeffentlicht:'var(--gold)'};
+    box.innerHTML = rows.map(r => {
+      const zutaten = rezToArray(r.zutaten);
+      const zubereitung = rezToArray(r.zubereitung);
+      const typBadge = r.typ === 'klassiker' ? '🍹 Klassiker' : (r.typ === 'kreation' ? '✨ Kreation' : '');
+      return `
+      <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <div style="font-weight:700;font-size:15px;color:var(--paper-text)">${r.titel}</div>
+            <div style="font-size:11px;color:var(--smoke);margin-top:2px">
+              ${r.spirituose || ''}${r.honigsorte ? ' · '+r.honigsorte+' Honig' : ''} ${typBadge ? '· '+typBadge : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+            <select class="ctrl-select" style="font-size:11px;padding:2px 6px" onchange="rezeptStatus(${r.id}, this.value)">
+              <option value="idee" ${r.status==='idee'?'selected':''}>💡 Idee</option>
+              <option value="getestet" ${r.status==='getestet'?'selected':''}>✅ Getestet & gut</option>
+              <option value="verworfen" ${r.status==='verworfen'?'selected':''}>❌ Verworfen</option>
+              <option value="veroeffentlicht" ${r.status==='veroeffentlicht'?'selected':''}>📤 Veröffentlicht</option>
+            </select>
+          </div>
+        </div>
+        ${r.beschreibung ? `<div style="font-size:12px;color:var(--smoke);margin-top:8px;font-style:italic">${r.beschreibung}</div>` : ''}
+        <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:140px">
+            <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:4px">Zutaten</div>
+            <ul style="font-size:12px;color:var(--smoke);margin:0;padding-left:16px">${zutaten.map(z=>`<li>${z}</li>`).join('')}</ul>
+          </div>
+          <div style="flex:1;min-width:140px">
+            <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:4px">Zubereitung</div>
+            <ol style="font-size:12px;color:var(--smoke);margin:0;padding-left:16px">${zubereitung.map(s=>`<li>${s}</li>`).join('')}</ol>
+          </div>
+        </div>
+        ${r.glas ? `<div style="font-size:11px;color:var(--smoke);margin-top:8px">🥃 ${r.glas}</div>` : ''}
+        <input type="text" placeholder="Deine Notiz nach dem Testen…" value="${(r.notiz||'').replace(/"/g,'&quot;')}"
+          class="ctrl-select" style="width:100%;margin-top:10px;font-size:12px"
+          onblur="rezeptNotiz(${r.id}, this.value)">
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-dark btn-sm" onclick="rezeptBlogEntwurf(${r.id})">📄 Als Blog-Entwurf kopieren</button>
+          <button class="btn btn-ghost btn-sm" onclick="rezeptLoeschen(${r.id})">🗑</button>
+        </div>
       </div>`;
     }).join('');
   } catch(e) { box.innerHTML = 'Fehler beim Laden.'; }
