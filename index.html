@@ -1040,6 +1040,33 @@ function rezToArray(v) {
   return [];
 }
 
+function rezeptZutatBereinigen(zeile) {
+  let z = zeile.trim();
+  // Führende Mengenangabe entfernen, z.B. "4 cl ", "2 TL ", "1 Stück ", "ca. 3 "
+  z = z.replace(/^(ca\.?\s*)?[\d.,]+\s*\/?\s*[\d.,]*\s*(cl|ml|l|g|kg|tl|el|stk\.?|stück|blatt|blätter|scheibe[n]?|zweig[e]?|würfel|barlöffel|bar-löffel|dash(es)?|prise[n]?|spritzer)?\s*/i, '');
+  // Führende Mengenwörter ohne Zahl entfernen, z.B. "ein Spritzer ", "etwas ", "ein paar "
+  z = z.replace(/^(ein(e|en)?\s+(spritzer|schuss|hauch)|etwas|ein paar|wenige|nach belieben)\s+/i, '');
+  z = z.trim();
+  if (z.length) z = z.charAt(0).toUpperCase() + z.slice(1);
+  return z;
+}
+
+function rezeptEinkaufslisteBauen(rows) {
+  const gesehen = new Set();
+  const ergebnis = [];
+  rows.forEach(r => {
+    rezToArray(r.zutaten).forEach(zeile => {
+      const bereinigt = rezeptZutatBereinigen(zeile);
+      const key = bereinigt.toLowerCase();
+      if (bereinigt && !gesehen.has(key)) {
+        gesehen.add(key);
+        ergebnis.push(bereinigt);
+      }
+    });
+  });
+  return ergebnis.sort((a, b) => a.localeCompare(b, 'de'));
+}
+
 let rezeptAktuellerFilter = null; // null = Ordner-Übersicht, 'alle' = flache Liste, Name = gefiltert
 
 function rezeptFilterSetzen(spirituose) {
@@ -1079,8 +1106,29 @@ async function ladeRezepte() {
       if (zaehlung['Sonstige'] > 0) {
         html += `<div onclick="rezeptFilterSetzen('Sonstige')" style="cursor:pointer;font-size:12px;color:var(--smoke);text-align:center;margin-bottom:8px">📦 ${zaehlung['Sonstige']} sonstige Rezepte ohne klare Spirituose ansehen</div>`;
       }
-      html += `<div style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="rezeptFilterSetzen('alle')">📋 Alle ${alleRows.length} Rezepte auf einmal anzeigen</button></div>`;
+      html += `<div style="text-align:center;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="rezeptFilterSetzen('alle')">📋 Alle ${alleRows.length} Rezepte auf einmal anzeigen</button>
+        <button class="btn btn-dark btn-sm" onclick="rezeptFilterSetzen('einkaufsliste')">🛒 Einkaufsliste erstellen</button>
+      </div>`;
       box.innerHTML = html;
+      return;
+    }
+
+    // ── Einkaufsliste ──
+    if (rezeptAktuellerFilter === 'einkaufsliste') {
+      const zurueckBtn = `<button class="btn btn-ghost btn-sm" onclick="rezeptFilterSetzen(null)" style="margin-bottom:12px">⬅ Zurück zur Übersicht</button>`;
+      const zutatenListe = rezeptEinkaufslisteBauen(alleRows);
+      if (!zutatenListe.length) {
+        box.innerHTML = zurueckBtn + '<div class="empty"><div class="empty-icon">🛒</div><h3>Keine Zutaten gefunden</h3></div>';
+        return;
+      }
+      const items = zutatenListe.map(z => `<li style="margin-bottom:4px">${z}</li>`).join('');
+      box.innerHTML = zurueckBtn + `
+        <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:16px">
+          <div style="font-weight:700;color:var(--gold);margin-bottom:10px">🛒 Einkaufsliste (${zutatenListe.length} Zutaten, aus allen ${alleRows.length} Rezepten)</div>
+          <ul style="font-size:13px;color:var(--paper-text);margin:0;padding-left:18px;columns:2;column-gap:24px">${items}</ul>
+          <div style="font-size:11px;color:var(--smoke);margin-top:12px">Ohne Mengenangaben – nur zum Einkaufen, für genaue cl-Mengen ins jeweilige Rezept schauen.</div>
+        </div>`;
       return;
     }
 
