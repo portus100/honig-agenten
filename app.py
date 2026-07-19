@@ -87,7 +87,7 @@ def sb_delete(table, filter_str):
         return False
 
 # ── CLAUDE (Analyse & Logik) ──
-def call_claude(system_prompt, user_message, history=None):
+def call_claude(system_prompt, user_message, history=None, max_tokens=1000):
     if not ANTHROPIC_API_KEY:
         return "ANTHROPIC_API_KEY fehlt"
     
@@ -106,11 +106,11 @@ def call_claude(system_prompt, user_message, history=None):
             },
             json={
                 "model": "claude-sonnet-4-5",
-                "max_tokens": 1000,
+                "max_tokens": max_tokens,
                 "system": system_prompt,
                 "messages": messages
             },
-            timeout=20
+            timeout=30
         )
         data = r.json()
         if not r.ok:
@@ -1915,7 +1915,7 @@ Diese Rezepte gibt es schon – erstelle KEINE davon nochmal, auch keine sehr ä
 Antworte NUR mit einem JSON-Array, kein anderer Text. Format pro Rezept:
 {{"titel": "Name des Cocktails", "spirituose": "Wacholdergold|Fassgold|Inselgold", "honigsorte": "eine der Sorten oder leer", "typ": "klassiker|kreation", "beschreibung": "1-2 Sätze worum es geht", "zutaten": ["4 cl ...", "2 cl ...", "..."], "zubereitung": ["Schritt 1", "Schritt 2", "..."], "glas": "Glasempfehlung"}}"""
 
-    antwort = call_claude(system_prompt, user_msg)
+    antwort = call_claude(system_prompt, user_msg, max_tokens=min(700 * anzahl + 500, 4000))
     try:
         json_match = re.search(r'\[.*\]', antwort, re.DOTALL)
         rezepte = json.loads(json_match.group()) if json_match else []
