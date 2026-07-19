@@ -1902,10 +1902,13 @@ def rezept_generieren(anzahl=3, spirituose=None, honigsorte=None, typ=None):
     else:
         vorgabe += "\nMische Klassiker-Adaptionen und eigenständige neue Kreationen."
 
-    system_prompt = """Du bist Cocktail-Entwickler für Honigspirituosen Josef Mayer in Wien.
+    system_prompt = f"""Du bist Cocktail-Entwickler für Honigspirituosen Josef Mayer in Wien.
 Die drei Produkte sind mit echtem Honig veredelt und bewusst NICHT süß, sondern charaktervoll – Claim: "Du erwartest Süße – du bekommst Charakter."
 Wichtig: Die Honignote soll im Cocktail erkennbar bleiben, nicht von süßen Mixern überdeckt werden. Bevorzuge daher eher trockene, nicht zu süße Begleiter.
-Deine Rezepte müssen realistisch mixbar sein mit üblichen Bar-Zutaten. Mengenangaben in cl oder Stück. Keine erfundenen Zutaten."""
+Deine Rezepte müssen realistisch mixbar sein mit üblichen Bar-Zutaten. Mengenangaben in cl oder Stück. Keine erfundenen Zutaten.
+
+ERLAUBTE HONIGSORTEN (nur diese verwenden): {", ".join(REZEPT_HONIGSORTEN)}.
+WICHTIG: Akazienhonig (auch Robinienhonig) NIEMALS verwenden oder erwähnen – der eignet sich laut Josef nachweislich nicht für die Veredelung und wird bei keinem der drei Produkte angeboten. Erfinde auch keine anderen Honigsorten außer den oben genannten."""
 
     user_msg = f"""Erstelle {anzahl} verschiedene Cocktail-Rezepte.{vorgabe}
 
@@ -1921,6 +1924,13 @@ Antworte NUR mit einem JSON-Array, kein anderer Text. Format pro Rezept:
         rezepte = json.loads(json_match.group()) if json_match else []
     except Exception:
         rezepte = []
+
+    # Sicherheitsnetz: unzulässige Honigsorten (v.a. Akazie/Robinie) korrigieren, statt das ganze Rezept zu verwerfen
+    for r in rezepte:
+        sorte = (r.get("honigsorte") or "").strip()
+        if sorte and sorte not in REZEPT_HONIGSORTEN:
+            r["honigsorte"] = ""  # unbekannte/unzulässige Sorte lieber leer lassen als falsch anzeigen
+
     return rezepte
 
 @app.route("/rezept/generieren", methods=["POST"])
