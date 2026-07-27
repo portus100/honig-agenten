@@ -8,6 +8,8 @@ import re
 import json
 import time
 import requests
+import pytesseract
+from pdf2image import convert_from_bytes
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, send_file
@@ -26,6 +28,11 @@ SUPABASE_URL     = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY", "") or os.environ.get("SUPABASE_ANON_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+SHOPIFY_STORE      = os.environ.get("SHOPIFY_STORE", "")
+SHOPIFY_ACCESS_TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
+SHOPIFY_BLOG_ID_WISSEN  = os.environ.get("SHOPIFY_BLOG_ID_WISSEN", "")
+SHOPIFY_BLOG_ID_REZEPTE = os.environ.get("SHOPIFY_BLOG_ID_REZEPTE", "")
+VOYAGE_API_KEY     = os.environ.get("VOYAGE_API_KEY", "")
 
 # ── SUPABASE HELPERS ──
 def sb_get(table, params=""):
@@ -3157,6 +3164,249 @@ def partner_anlegen():
         "angelegt": datetime.now().isoformat()
     })
     return jsonify({"success": True, "name": name})
+
+
+# ════════════════════════════════════════
+# BLOG-AGENT (BEEBLIOTHEK)
+# Nimmt Artikel entgegen (manuell oder aus Rezepten), veröffentlicht auf Shopify
+# ════════════════════════════════════════
+
+def _markdown_to_html(text):
+    """Einfache Markdown->HTML Umwandlung ohne externe Abhängigkeit."""
+    html = text.strip()
+    html = re.sub(r"^### (.*)$", r"<h3>\1</h3>", html, flags=re.MULTILINE)
+    html = re.sub(r"^## (.*)$", r"<h2>\1</h2>", html, flags=re.MULTILINE)
+    html = re.sub(r"^# (.*)$", r"<h2>\1</h2>", html, flags=re.MULTILINE)
+    html = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", html)
+    absätze = html.split("\n\n")
+    return "\n".join(
+        a if a.strip().startswith("<h2>") or a.strip().startswith("<h3>") else f"<p>{a.strip()}</p>"
+        for a in absätze if a.strip()
+    )
+
+def _shopify_publish(artikel):
+    """Erstellt einen Artikel im passenden Shopify-Blog."""
+    blog_id = SHOPIFY_BLOG_ID_WISSEN if artikel["blog"] == "wissen" else SHOPIFY_BLOG_ID_REZEPTE
+    if not blog_id:
+        return None, f"Keine Shopify blog_id für '{artikel['blog']}' konfiguriert"
+    url = f"https://{SHOPIFY_STORE}/admin/api/2025-01/blogs/{blog_id}/articles.json"
+    payload = {"article": {
+        "title": artikel["titel"],
+        "body_html": _markdown_to_html(artikel["text"]),
+        "excerpt": artikel["auszug"],
+        "published": True
+    }}
+    try:
+        r = requests.post(url, json=payload,
+                           headers={"X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+                                    "Content-Type": "application/json"}, timeout=30)
+        r.raise_for_status()
+        return r.json()["article"]["id"], None
+    except Exception as e:
+        return None, str(e)
+
+@app.route("/blog/artikel", methods=["POST"])
+def blog_artikel_hinzufuegen():
+    """Manuelles Hinzufügen eines neuen Artikels, z.B. aus dem Dashboard-Formular."""
+    data = request.json or {}
+    for feld in ("titel", "text", "auszug"):
+        if not data.get(feld):
+            return jsonify({"success": False, "error": f"Feld '{feld}' fehlt"})
+    eintrag = {
+        "titel": data["titel"].strip(),
+        "text": data["text"],
+        "auszug": data["auszug"],
+        "blog": data.get("blog", "wissen"),
+        "status": "queued",
+        "quelle": "manuell"
+    }
+    sb_insert("blog_artikel", eintrag)
+    return jsonify({"success": True})
+
+@app.route("/blog/liste", methods=["GET"])
+def blog_liste():
+    status = request.args.get("status", "")
+    params = "select=*&order=erstellt_am.desc"
+    if status:
+        params += f"&status=eq.{status}"
+    rows = sb_get("blog_artikel", params) or []
+    return jsonify({"success": True, "artikel": rows})
+
+def _rezepte_in_blog_queue_uebernehmen(limit=10):
+    """Holt Rezepte mit status='getestet', die noch nicht exportiert wurden,
+    und legt daraus queued Blogartikel an."""
+    rezepte = sb_get("rezepte",
+        f"select=*&status=eq.getestet&blog_exportiert=is.false&limit={limit}") or []
+    neu = 0
+    for r in rezepte:
+        zutaten = r.get("zutaten") or []
+        zubereitung = r.get("zubereitung") or []
+        text = "## Zutaten\n\n" + "\n".join(f"- {z}" for z in zutaten)
+        text += "\n\n## Zubereitung\n\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(zubereitung))
+        sb_insert("blog_artikel", {
+            "titel": r.get("titel") or "Rezept",
+            "text": text,
+            "auszug": r.get("beschreibung") or f"Ein Rezept mit {r.get('spirituose','Honigspirituose')}.",
+            "blog": "rezepte",
+            "status": "queued",
+            "quelle": "rezept",
+            "rezept_id": r["id"]
+        })
+        sb_update("rezepte", f"id=eq.{r['id']}", {"blog_exportiert": True})
+        neu += 1
+    return neu
+
+def _blog_queue_veroeffentlichen(limit=5):
+    """Veröffentlicht bis zu `limit` queued Artikel auf Shopify (Rate-Limit-Schutz)."""
+    queue = sb_get("blog_artikel", f"select=*&status=eq.queued&limit={limit}") or []
+    veroeffentlicht, fehlgeschlagen = 0, 0
+    for artikel in queue:
+        shopify_id, fehler = _shopify_publish(artikel)
+        if shopify_id:
+            sb_update("blog_artikel", f"id=eq.{artikel['id']}",
+                       {"status": "veroeffentlicht", "shopify_article_id": str(shopify_id)})
+            if artikel.get("rezept_id"):
+                sb_update("rezepte", f"id=eq.{artikel['rezept_id']}", {"status": "veroeffentlicht"})
+            veroeffentlicht += 1
+        else:
+            sb_update("blog_artikel", f"id=eq.{artikel['id']}", {"status": "fehler", "fehlermeldung": fehler})
+            fehlgeschlagen += 1
+    return veroeffentlicht, fehlgeschlagen
+
+@app.route("/blog/run", methods=["GET", "POST"])
+def blog_run():
+    """Von cron-job.org regelmäßig aufrufen lassen (z.B. alle 30 Min)."""
+    neu = _rezepte_in_blog_queue_uebernehmen()
+    veroeffentlicht, fehlgeschlagen = _blog_queue_veroeffentlichen()
+    return jsonify({"success": True, "rezepte_neu_gequeued": neu,
+                     "veroeffentlicht": veroeffentlicht, "fehlgeschlagen": fehlgeschlagen})
+
+
+# ════════════════════════════════════════
+# WISSENSBIBLIOTHEK
+# Fachliteratur per OCR erfassen, in Abschnitte zerlegen, semantisch durchsuchbar machen
+# ════════════════════════════════════════
+
+MAX_CHUNK_WORDS = 2000  # harte Obergrenze pro Abschnitt, falls ein Kapitel sehr lang ist
+
+def _ist_ueberschrift(zeile):
+    zeile = zeile.strip()
+    if not (3 <= len(zeile) <= 60):
+        return False
+    if zeile and zeile[-1] in ".,;:":
+        return False
+    return len(zeile.split()) <= 6
+
+def _bibliothek_ocr(pdf_bytes):
+    seiten = convert_from_bytes(pdf_bytes, dpi=200)
+    return [pytesseract.image_to_string(s, lang="deu") for s in seiten]
+
+def _bibliothek_chunking(seiten_texte):
+    """Zerlegt anhand erkannter Zwischenüberschriften statt starrer Wortzahl,
+    damit z.B. der Varroa-Abschnitt als eigener, in sich geschlossener Chunk
+    erhalten bleibt, egal wie kurz er ist."""
+    chunks = []
+    aktuelle_ueberschrift, aktuelle_zeilen, start_seite = None, [], 0
+
+    def flush(end_seite):
+        if not aktuelle_zeilen:
+            return
+        text = "\n".join(aktuelle_zeilen).strip()
+        if not text:
+            return
+        woerter = text.split()
+        for i in range(0, len(woerter), MAX_CHUNK_WORDS):
+            chunks.append({
+                "text": " ".join(woerter[i:i + MAX_CHUNK_WORDS]),
+                "kapitel": aktuelle_ueberschrift,
+                "seite_von": start_seite,
+                "seite_bis": end_seite
+            })
+
+    for seiten_num, text in enumerate(seiten_texte):
+        for zeile in text.split("\n"):
+            if _ist_ueberschrift(zeile):
+                flush(seiten_num)
+                aktuelle_ueberschrift = zeile.strip()
+                aktuelle_zeilen = []
+                start_seite = seiten_num
+            else:
+                aktuelle_zeilen.append(zeile)
+    flush(len(seiten_texte) - 1)
+    return chunks
+
+def _voyage_embedding(text):
+    r = requests.post("https://api.voyageai.com/v1/embeddings",
+        headers={"Authorization": f"Bearer {VOYAGE_API_KEY}", "Content-Type": "application/json"},
+        json={"input": [text], "model": "voyage-3.5", "input_type": "document"}, timeout=30)
+    r.raise_for_status()
+    return r.json()["data"][0]["embedding"]
+
+@app.route("/bibliothek/upload", methods=["POST"])
+def bibliothek_upload():
+    """Nimmt eine PDF entgegen (Material, das dem Uploader gehört), macht OCR,
+    zerlegt nach Kapiteln, erzeugt Embeddings, speichert in Supabase."""
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "Keine Datei mitgeschickt (Feld 'file')"})
+
+    quelle_titel = request.form.get("quelle_titel", "Unbenannt")
+    quelle_typ = request.form.get("quelle_typ", "buch")
+    kapitel_override = request.form.get("kapitel")
+
+    pdf_bytes = request.files["file"].read()
+    seiten_texte = _bibliothek_ocr(pdf_bytes)
+    chunks = _bibliothek_chunking(seiten_texte)
+
+    gespeichert, fehler = 0, []
+    for chunk in chunks:
+        try:
+            embedding = _voyage_embedding(chunk["text"])
+            sb_insert("wissensbibliothek", {
+                "quelle_titel": quelle_titel,
+                "quelle_typ": quelle_typ,
+                "kapitel": kapitel_override or chunk["kapitel"],
+                "seite_von": chunk["seite_von"],
+                "seite_bis": chunk["seite_bis"],
+                "text": chunk["text"],
+                "embedding": embedding
+            })
+            gespeichert += 1
+        except Exception as e:
+            fehler.append(str(e))
+
+    return jsonify({"success": True, "seiten_verarbeitet": len(seiten_texte),
+                     "abschnitte_gespeichert": gespeichert, "fehler": fehler})
+
+@app.route("/bibliothek/suche", methods=["GET"])
+def bibliothek_suche():
+    """Semantische Suche: liefert die passendsten Textabschnitte zu einer Frage.
+    Wird vom Beebliothek-Agent vor dem Artikelschreiben aufgerufen."""
+    frage = request.args.get("q")
+    if not frage:
+        return jsonify({"success": False, "error": "Parameter 'q' fehlt"})
+    limit = int(request.args.get("limit", 5))
+    try:
+        embedding = _voyage_embedding(frage)
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_wissensbibliothek",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                     "Content-Type": "application/json"},
+            json={"query_embedding": embedding, "match_count": limit}, timeout=15)
+        r.raise_for_status()
+        return jsonify({"success": True, "treffer": r.json()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route("/bibliothek/quellen", methods=["GET"])
+def bibliothek_quellen():
+    """Übersicht, welche Bücher/Quellen schon eingespielt sind (für den Dashboard-Tab)."""
+    rows = sb_get("wissensbibliothek", "select=quelle_titel,quelle_typ") or []
+    zaehler = {}
+    for row in rows:
+        zaehler[row["quelle_titel"]] = zaehler.get(row["quelle_titel"], 0) + 1
+    return jsonify({"success": True, "quellen": [
+        {"titel": k, "anzahl_abschnitte": v} for k, v in zaehler.items()
+    ]})
 
 
 if __name__ == "__main__":

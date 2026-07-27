@@ -183,6 +183,7 @@
   <div class="tab" onclick="switchTab('aivis')" id="tab-aivis">🔍 AI-Sichtbarkeit</div>
   <div class="tab" onclick="switchTab('geo')" id="tab-geo">🎯 GEO/Content</div>
   <div class="tab" onclick="switchTab('rezepte')" id="tab-rezepte">🍸 Rezepte</div>
+  <div class="tab" onclick="switchTab('bibliothek')" id="tab-bibliothek">📚 Beebliothek</div>
 </div>
 
 <div class="body">
@@ -711,6 +712,48 @@
       <div id="rezepteListe"><div class="empty"><div class="empty-icon">🍸</div><h3>Lädt…</h3></div></div>
     </div>
 
+    <div class="panel" id="panel-bibliothek">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Beebliothek <em>/ Blog & Wissensbibliothek</em></div>
+          <div class="panel-sub">Artikel-Queue für Shopify, plus Fachliteratur für bessere Artikel</div>
+        </div>
+      </div>
+
+      <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">✍️ Neuen Artikel hinzufügen</div>
+        <input class="ctrl-select" id="blogTitel" placeholder="Titel (volle Frage-Überschrift)" style="width:100%;margin-bottom:6px">
+        <textarea class="ctrl-select" id="blogText" placeholder="Artikeltext (Markdown, ## für Zwischenüberschriften)" rows="4" style="width:100%;margin-bottom:6px"></textarea>
+        <input class="ctrl-select" id="blogAuszug" placeholder="Kurzzusammenfassung / Auszug" style="width:100%;margin-bottom:6px">
+        <select class="ctrl-select" id="blogBlog" style="margin-bottom:6px">
+          <option value="wissen">Blog: Wissen</option>
+          <option value="rezepte">Blog: Rezepte</option>
+        </select>
+        <br>
+        <button class="btn btn-dark btn-sm" onclick="blogArtikelHinzufuegen()">Zur Queue hinzufügen</button>
+        <span id="blogAddStatus" style="font-size:12px;color:var(--smoke);margin-left:8px"></span>
+      </div>
+
+      <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">📋 Artikel-Queue</div>
+      <div id="blogQueueListe"><div class="empty"><div class="empty-icon">📝</div><h3>Lädt…</h3></div></div>
+
+      <div style="background:var(--paper2);border:1px solid var(--border);border-radius:8px;padding:14px;margin:24px 0 16px">
+        <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">📚 Fachliteratur hochladen</div>
+        <input class="ctrl-select" id="bibTitel" placeholder="Titel des Buchs/der Quelle" style="width:100%;margin-bottom:6px">
+        <select class="ctrl-select" id="bibTyp" style="margin-bottom:6px">
+          <option value="buch">Buch</option>
+          <option value="verordnung">Verordnung/Richtlinie</option>
+          <option value="studie">Wissenschaftliche Studie</option>
+        </select>
+        <input type="file" id="bibFile" accept="application/pdf" style="margin-bottom:6px;display:block">
+        <button class="btn btn-dark btn-sm" onclick="bibliothekUpload()">Hochladen &amp; verarbeiten</button>
+        <span id="bibUploadStatus" style="font-size:12px;color:var(--smoke);margin-left:8px"></span>
+      </div>
+
+      <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px">Eingespielte Quellen</div>
+      <div id="bibQuellenListe"><div class="empty"><div class="empty-icon">📚</div><h3>Lädt…</h3></div></div>
+    </div>
+
   </div>
 </div>
 
@@ -733,6 +776,7 @@ function switchTab(tab) {
   if (tab === 'brand') loadBrand();
   if (tab === 'maerkte') loadVeranstalter();
   if (tab === 'geschenke') { ladeZielgruppen(); ladeGeschenkLeads(); }
+  if (tab === 'bibliothek') { ladeBlogQueue(); ladeBibliothekQuellen(); }
   if (tab === 'aivis') { ladeAivisWochen(); ladeAivis(); }
   if (tab === 'geo') { ladeGeoScoreVerlauf(); ladeGeoPipeline(); setGeoDatumHeute(); }
   if (tab === 'rezepte') { ladeRezepte(); }
@@ -1032,6 +1076,93 @@ async function rezeptBlogEntwurf(id) {
       showToast(data.error || 'Fehler');
     }
   } catch(e) { showToast('Fehler: '+e.message); }
+}
+
+// ── BEEBLIOTHEK: BLOG-QUEUE ──
+async function ladeBlogQueue() {
+  const el = document.getElementById('blogQueueListe');
+  try {
+    const res = await fetch('/blog/liste');
+    const data = await res.json();
+    const artikel = data.artikel || [];
+    if (artikel.length === 0) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">📝</div><h3>Noch keine Artikel</h3></div>';
+      return;
+    }
+    el.innerHTML = artikel.map(a => `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+        <div style="font-weight:700">${a.titel}</div>
+        <div style="font-size:11px;color:var(--smoke)">${a.blog} · ${a.quelle} · Status: ${a.status}</div>
+        <div style="font-size:12px;font-style:italic;margin-top:4px">${a.auszug || ''}</div>
+      </div>
+    `).join('');
+  } catch(e) { el.innerHTML = `<div class="empty"><h3>Fehler: ${e.message}</h3></div>`; }
+}
+
+async function blogArtikelHinzufuegen() {
+  const status = document.getElementById('blogAddStatus');
+  const titel = document.getElementById('blogTitel').value.trim();
+  const text = document.getElementById('blogText').value.trim();
+  const auszug = document.getElementById('blogAuszug').value.trim();
+  const blog = document.getElementById('blogBlog').value;
+  if (!titel || !text || !auszug) { status.textContent = 'Titel, Text und Auszug ausfüllen'; return; }
+
+  status.textContent = 'Speichere...';
+  try {
+    const res = await fetch('/blog/artikel', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({titel, text, auszug, blog})
+    });
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = 'Zur Queue hinzugefügt ✅';
+      document.getElementById('blogTitel').value = '';
+      document.getElementById('blogText').value = '';
+      document.getElementById('blogAuszug').value = '';
+      ladeBlogQueue();
+    } else {
+      status.textContent = data.error || 'Fehler';
+    }
+  } catch(e) { status.textContent = 'Fehler: ' + e.message; }
+}
+
+// ── BEEBLIOTHEK: WISSENSBIBLIOTHEK ──
+async function ladeBibliothekQuellen() {
+  const el = document.getElementById('bibQuellenListe');
+  try {
+    const res = await fetch('/bibliothek/quellen');
+    const data = await res.json();
+    const quellen = data.quellen || [];
+    if (quellen.length === 0) {
+      el.innerHTML = '<div class="empty"><div class="empty-icon">📚</div><h3>Noch keine Quellen</h3></div>';
+      return;
+    }
+    el.innerHTML = '<ul>' + quellen.map(q => `<li>${q.titel} (${q.anzahl_abschnitte} Abschnitte)</li>`).join('') + '</ul>';
+  } catch(e) { el.innerHTML = `<div class="empty"><h3>Fehler: ${e.message}</h3></div>`; }
+}
+
+async function bibliothekUpload() {
+  const status = document.getElementById('bibUploadStatus');
+  const fileInput = document.getElementById('bibFile');
+  const titel = document.getElementById('bibTitel').value.trim();
+  if (!titel || !fileInput.files[0]) { status.textContent = 'Titel und PDF-Datei angeben'; return; }
+
+  status.textContent = 'Verarbeite... (kann bei größeren Büchern ein paar Minuten dauern)';
+  const formData = new FormData();
+  formData.append('quelle_titel', titel);
+  formData.append('quelle_typ', document.getElementById('bibTyp').value);
+  formData.append('file', fileInput.files[0]);
+
+  try {
+    const res = await fetch('/bibliothek/upload', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = `Fertig: ${data.seiten_verarbeitet} Seiten, ${data.abschnitte_gespeichert} Abschnitte gespeichert.`;
+      ladeBibliothekQuellen();
+    } else {
+      status.textContent = data.error || 'Fehler';
+    }
+  } catch(e) { status.textContent = 'Fehler: ' + e.message; }
 }
 
 function rezToArray(v) {

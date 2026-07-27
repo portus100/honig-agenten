@@ -2,7 +2,7 @@ services:
   - type: web
     name: honig-agenten
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-deu poppler-utils && pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
       - key: GOOGLE_API_KEY
@@ -16,4 +16,14 @@ services:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SHOPIFY_STORE
+        sync: false
+      - key: SHOPIFY_ACCESS_TOKEN
+        sync: false
+      - key: SHOPIFY_BLOG_ID_WISSEN
+        sync: false
+      - key: SHOPIFY_BLOG_ID_REZEPTE
+        sync: false
+      - key: VOYAGE_API_KEY
         sync: false
