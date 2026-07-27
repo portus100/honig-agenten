@@ -19,7 +19,9 @@ services:
         sync: false
       - key: SHOPIFY_STORE
         sync: false
-      - key: SHOPIFY_ACCESS_TOKEN
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
         sync: false
       - key: SHOPIFY_BLOG_ID_WISSEN
         sync: false

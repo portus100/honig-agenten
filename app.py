@@ -29,7 +29,8 @@ SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY", "") or os.environ.get(
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 SHOPIFY_STORE      = os.environ.get("SHOPIFY_STORE", "")
-SHOPIFY_ACCESS_TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
+SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 SHOPIFY_BLOG_ID_WISSEN  = os.environ.get("SHOPIFY_BLOG_ID_WISSEN", "")
 SHOPIFY_BLOG_ID_REZEPTE = os.environ.get("SHOPIFY_BLOG_ID_REZEPTE", "")
 VOYAGE_API_KEY     = os.environ.get("VOYAGE_API_KEY", "")
@@ -3184,6 +3185,30 @@ def _markdown_to_html(text):
         for a in absätze if a.strip()
     )
 
+_shopify_token_cache = {"token": None, "läuft_ab": 0}
+
+def _shopify_token():
+    """Holt einen Admin-API-Zugangstoken via Client Credentials Grant (neues Shopify Dev-Dashboard-System).
+    Token läuft nach 24h ab, wird hier automatisch zwischengespeichert und erneuert."""
+    if _shopify_token_cache["token"] and time.time() < _shopify_token_cache["läuft_ab"]:
+        return _shopify_token_cache["token"]
+
+    r = requests.post(
+        f"https://{SHOPIFY_STORE}/admin/oauth/access_token",
+        json={
+            "client_id": SHOPIFY_CLIENT_ID,
+            "client_secret": SHOPIFY_CLIENT_SECRET,
+            "grant_type": "client_credentials"
+        },
+        timeout=15
+    )
+    r.raise_for_status()
+    data = r.json()
+    _shopify_token_cache["token"] = data["access_token"]
+    # 23h statt 24h Puffer, damit nie ein abgelaufener Token verwendet wird
+    _shopify_token_cache["läuft_ab"] = time.time() + 23 * 3600
+    return _shopify_token_cache["token"]
+
 def _shopify_publish(artikel):
     """Erstellt einen Artikel im passenden Shopify-Blog."""
     blog_id = SHOPIFY_BLOG_ID_WISSEN if artikel["blog"] == "wissen" else SHOPIFY_BLOG_ID_REZEPTE
@@ -3197,8 +3222,9 @@ def _shopify_publish(artikel):
         "published": True
     }}
     try:
+        token = _shopify_token()
         r = requests.post(url, json=payload,
-                           headers={"X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+                           headers={"X-Shopify-Access-Token": token,
                                     "Content-Type": "application/json"}, timeout=30)
         r.raise_for_status()
         return r.json()["article"]["id"], None
