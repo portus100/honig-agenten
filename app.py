@@ -3323,9 +3323,23 @@ def _ist_ueberschrift(zeile):
         return False
     return len(zeile.split()) <= 6
 
-def _bibliothek_ocr(pdf_bytes):
-    seiten = convert_from_bytes(pdf_bytes, dpi=200)
-    return [pytesseract.image_to_string(s, lang="deu") for s in seiten]
+from PIL import Image
+from io import BytesIO
+
+def _bibliothek_ocr(dateien):
+    """Nimmt eine Liste von Dateien entgegen – entweder 1 PDF, oder mehrere Einzelbilder
+    (bereits in der gewünschten Seitenreihenfolge). Gibt pro Seite den erkannten Text zurück."""
+    seiten_texte = []
+    for datei in dateien:
+        bytes_daten = datei.read()
+        if datei.mimetype == "application/pdf" or datei.filename.lower().endswith(".pdf"):
+            seiten = convert_from_bytes(bytes_daten, dpi=200)
+            for seite in seiten:
+                seiten_texte.append(pytesseract.image_to_string(seite, lang="deu"))
+        else:
+            bild = Image.open(BytesIO(bytes_daten))
+            seiten_texte.append(pytesseract.image_to_string(bild, lang="deu"))
+    return seiten_texte
 
 def _bibliothek_chunking(seiten_texte):
     """Zerlegt anhand erkannter Zwischenüberschriften statt starrer Wortzahl,
@@ -3370,17 +3384,17 @@ def _voyage_embedding(text):
 
 @app.route("/bibliothek/upload", methods=["POST"])
 def bibliothek_upload():
-    """Nimmt eine PDF entgegen (Material, das dem Uploader gehört), macht OCR,
-    zerlegt nach Kapiteln, erzeugt Embeddings, speichert in Supabase."""
-    if "file" not in request.files:
-        return jsonify({"success": False, "error": "Keine Datei mitgeschickt (Feld 'file')"})
+    """Nimmt 1 PDF oder mehrere Einzelbilder entgegen (Material, das dem Uploader gehört),
+    macht OCR, zerlegt nach Kapiteln, erzeugt Embeddings, speichert in Supabase."""
+    dateien = request.files.getlist("file")
+    if not dateien:
+        return jsonify({"success": False, "error": "Keine Datei(en) mitgeschickt (Feld 'file')"})
 
     quelle_titel = request.form.get("quelle_titel", "Unbenannt")
     quelle_typ = request.form.get("quelle_typ", "buch")
     kapitel_override = request.form.get("kapitel")
 
-    pdf_bytes = request.files["file"].read()
-    seiten_texte = _bibliothek_ocr(pdf_bytes)
+    seiten_texte = _bibliothek_ocr(dateien)
     chunks = _bibliothek_chunking(seiten_texte)
 
     gespeichert, fehler = 0, []

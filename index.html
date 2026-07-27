@@ -745,7 +745,8 @@
           <option value="verordnung">Verordnung/Richtlinie</option>
           <option value="studie">Wissenschaftliche Studie</option>
         </select>
-        <input type="file" id="bibFile" accept="application/pdf" style="margin-bottom:6px;display:block">
+        <input type="file" id="bibFile" accept="application/pdf,image/*" multiple style="margin-bottom:6px;display:block">
+    <div style="font-size:11px;color:var(--smoke);margin-bottom:6px">Entweder 1 PDF, oder gleich alle Einzel-Scans (Bilder) auf einmal auswählen – Reihenfolge nach Dateiname.</div>
         <button class="btn btn-dark btn-sm" onclick="bibliothekUpload()">Hochladen &amp; verarbeiten</button>
         <span id="bibUploadStatus" style="font-size:12px;color:var(--smoke);margin-left:8px"></span>
       </div>
@@ -1145,13 +1146,15 @@ async function bibliothekUpload() {
   const status = document.getElementById('bibUploadStatus');
   const fileInput = document.getElementById('bibFile');
   const titel = document.getElementById('bibTitel').value.trim();
-  if (!titel || !fileInput.files[0]) { status.textContent = 'Titel und PDF-Datei angeben'; return; }
+  if (!titel || fileInput.files.length === 0) { status.textContent = 'Titel und mind. 1 Datei angeben'; return; }
 
-  status.textContent = 'Verarbeite... (kann bei größeren Büchern ein paar Minuten dauern)';
+  status.textContent = `Verarbeite ${fileInput.files.length} Datei(en)... (kann bei vielen Scans ein paar Minuten dauern)`;
   const formData = new FormData();
   formData.append('quelle_titel', titel);
   formData.append('quelle_typ', document.getElementById('bibTyp').value);
-  formData.append('file', fileInput.files[0]);
+  // Nach Dateiname sortieren, damit die Seitenreihenfolge stimmt (z.B. scan_001.jpg, scan_002.jpg, ...)
+  const dateien = Array.from(fileInput.files).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+  dateien.forEach(f => formData.append('file', f));
 
   try {
     const res = await fetch('/bibliothek/upload', { method: 'POST', body: formData });
