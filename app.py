@@ -3326,21 +3326,6 @@ def _ist_ueberschrift(zeile):
 from PIL import Image
 from io import BytesIO
 
-def _bibliothek_ocr(dateien):
-    """Nimmt eine Liste von Dateien entgegen – entweder 1 PDF, oder mehrere Einzelbilder
-    (bereits in der gewünschten Seitenreihenfolge). Gibt pro Seite den erkannten Text zurück."""
-    seiten_texte = []
-    for datei in dateien:
-        bytes_daten = datei.read()
-        if datei.mimetype == "application/pdf" or datei.filename.lower().endswith(".pdf"):
-            seiten = convert_from_bytes(bytes_daten, dpi=200)
-            for seite in seiten:
-                seiten_texte.append(pytesseract.image_to_string(seite, lang="deu"))
-        else:
-            bild = Image.open(BytesIO(bytes_daten))
-            seiten_texte.append(pytesseract.image_to_string(bild, lang="deu"))
-    return seiten_texte
-
 def _bibliothek_chunking(seiten_texte):
     """Zerlegt anhand erkannter Zwischenüberschriften statt starrer Wortzahl,
     damit z.B. der Varroa-Abschnitt als eigener, in sich geschlossener Chunk
@@ -3382,40 +3367,82 @@ def _voyage_embedding(text):
     r.raise_for_status()
     return r.json()["data"][0]["embedding"]
 
+import threading
+import uuid
+
+_bibliothek_jobs = {}  # job_id -> {"status", "fortschritt", "gesamt", "fehler", "abschnitte_gespeichert"}
+
+def _bibliothek_job_verarbeiten(job_id, dateien_daten, quelle_titel, quelle_typ, kapitel_override):
+    """Läuft im Hintergrund-Thread, damit die HTTP-Anfrage nicht auf Minuten wartet und in ein Timeout läuft."""
+    job = _bibliothek_jobs[job_id]
+    try:
+        seiten_texte = []
+        for i, (bytes_daten, mimetype, filename) in enumerate(dateien_daten):
+            if mimetype == "application/pdf" or filename.lower().endswith(".pdf"):
+                for seite in convert_from_bytes(bytes_daten, dpi=200):
+                    seiten_texte.append(pytesseract.image_to_string(seite, lang="deu"))
+            else:
+                bild = Image.open(BytesIO(bytes_daten))
+                seiten_texte.append(pytesseract.image_to_string(bild, lang="deu"))
+            job["fortschritt"] = i + 1
+
+        chunks = _bibliothek_chunking(seiten_texte)
+        job["gesamt_abschnitte"] = len(chunks)
+        gespeichert = 0
+        for chunk in chunks:
+            try:
+                embedding = _voyage_embedding(chunk["text"])
+                sb_insert("wissensbibliothek", {
+                    "quelle_titel": quelle_titel,
+                    "quelle_typ": quelle_typ,
+                    "kapitel": kapitel_override or chunk["kapitel"],
+                    "seite_von": chunk["seite_von"],
+                    "seite_bis": chunk["seite_bis"],
+                    "text": chunk["text"],
+                    "embedding": embedding
+                })
+                gespeichert += 1
+            except Exception as e:
+                job["fehler"].append(str(e))
+        job["abschnitte_gespeichert"] = gespeichert
+        job["status"] = "fertig"
+    except Exception as e:
+        job["fehler"].append(str(e))
+        job["status"] = "fehler"
+
 @app.route("/bibliothek/upload", methods=["POST"])
 def bibliothek_upload():
-    """Nimmt 1 PDF oder mehrere Einzelbilder entgegen (Material, das dem Uploader gehört),
-    macht OCR, zerlegt nach Kapiteln, erzeugt Embeddings, speichert in Supabase."""
+    """Nimmt 1 PDF oder mehrere Einzelbilder entgegen, startet die Verarbeitung im Hintergrund
+    (OCR + Chunking + Embeddings dauern bei vielen Seiten mehrere Minuten -> kein Request-Timeout)."""
     dateien = request.files.getlist("file")
     if not dateien:
         return jsonify({"success": False, "error": "Keine Datei(en) mitgeschickt (Feld 'file')"})
 
-    quelle_titel = request.form.get("quelle_titel", "Unbenannt")
-    quelle_typ = request.form.get("quelle_typ", "buch")
-    kapitel_override = request.form.get("kapitel")
+    # Bytes jetzt schon auslesen, bevor der Request-Kontext nach der Antwort verschwindet
+    dateien_daten = [(d.read(), d.mimetype, d.filename) for d in dateien]
 
-    seiten_texte = _bibliothek_ocr(dateien)
-    chunks = _bibliothek_chunking(seiten_texte)
+    job_id = str(uuid.uuid4())
+    _bibliothek_jobs[job_id] = {
+        "status": "läuft", "fortschritt": 0, "gesamt": len(dateien_daten),
+        "gesamt_abschnitte": None, "abschnitte_gespeichert": 0, "fehler": []
+    }
 
-    gespeichert, fehler = 0, []
-    for chunk in chunks:
-        try:
-            embedding = _voyage_embedding(chunk["text"])
-            sb_insert("wissensbibliothek", {
-                "quelle_titel": quelle_titel,
-                "quelle_typ": quelle_typ,
-                "kapitel": kapitel_override or chunk["kapitel"],
-                "seite_von": chunk["seite_von"],
-                "seite_bis": chunk["seite_bis"],
-                "text": chunk["text"],
-                "embedding": embedding
-            })
-            gespeichert += 1
-        except Exception as e:
-            fehler.append(str(e))
+    thread = threading.Thread(target=_bibliothek_job_verarbeiten, args=(
+        job_id, dateien_daten,
+        request.form.get("quelle_titel", "Unbenannt"),
+        request.form.get("quelle_typ", "buch"),
+        request.form.get("kapitel")
+    ))
+    thread.start()
 
-    return jsonify({"success": True, "seiten_verarbeitet": len(seiten_texte),
-                     "abschnitte_gespeichert": gespeichert, "fehler": fehler})
+    return jsonify({"success": True, "job_id": job_id})
+
+@app.route("/bibliothek/upload-status/<job_id>", methods=["GET"])
+def bibliothek_upload_status(job_id):
+    job = _bibliothek_jobs.get(job_id)
+    if not job:
+        return jsonify({"success": False, "error": "Job nicht gefunden"})
+    return jsonify({"success": True, **job})
 
 @app.route("/bibliothek/suche", methods=["GET"])
 def bibliothek_suche():

@@ -1148,24 +1148,41 @@ async function bibliothekUpload() {
   const titel = document.getElementById('bibTitel').value.trim();
   if (!titel || fileInput.files.length === 0) { status.textContent = 'Titel und mind. 1 Datei angeben'; return; }
 
-  status.textContent = `Verarbeite ${fileInput.files.length} Datei(en)... (kann bei vielen Scans ein paar Minuten dauern)`;
+  status.textContent = `Lade ${fileInput.files.length} Datei(en) hoch...`;
   const formData = new FormData();
   formData.append('quelle_titel', titel);
   formData.append('quelle_typ', document.getElementById('bibTyp').value);
-  // Nach Dateiname sortieren, damit die Seitenreihenfolge stimmt (z.B. scan_001.jpg, scan_002.jpg, ...)
   const dateien = Array.from(fileInput.files).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
   dateien.forEach(f => formData.append('file', f));
 
   try {
     const res = await fetch('/bibliothek/upload', { method: 'POST', body: formData });
     const data = await res.json();
-    if (data.success) {
-      status.textContent = `Fertig: ${data.seiten_verarbeitet} Seiten, ${data.abschnitte_gespeichert} Abschnitte gespeichert.`;
-      ladeBibliothekQuellen();
-    } else {
-      status.textContent = data.error || 'Fehler';
-    }
+    if (!data.success) { status.textContent = data.error || 'Fehler beim Start'; return; }
+    bibliothekJobVerfolgen(data.job_id, status);
   } catch(e) { status.textContent = 'Fehler: ' + e.message; }
+}
+
+function bibliothekJobVerfolgen(jobId, statusEl) {
+  const intervall = setInterval(async () => {
+    try {
+      const res = await fetch(`/bibliothek/upload-status/${jobId}`);
+      const job = await res.json();
+      if (!job.success) { clearInterval(intervall); statusEl.textContent = job.error; return; }
+
+      if (job.status === 'läuft') {
+        statusEl.textContent = `Verarbeite Seite ${job.fortschritt}/${job.gesamt}...`;
+      } else if (job.status === 'fertig') {
+        clearInterval(intervall);
+        statusEl.textContent = `Fertig: ${job.gesamt} Seiten, ${job.abschnitte_gespeichert} Abschnitte gespeichert.` +
+          (job.fehler.length ? ` (${job.fehler.length} Fehler)` : '');
+        ladeBibliothekQuellen();
+      } else if (job.status === 'fehler') {
+        clearInterval(intervall);
+        statusEl.textContent = 'Fehler: ' + (job.fehler[0] || 'unbekannt');
+      }
+    } catch(e) { /* kurzer Netzwerk-Hänger, nächster Versuch kommt automatisch */ }
+  }, 4000);
 }
 
 function rezToArray(v) {
