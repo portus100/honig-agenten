@@ -3372,6 +3372,15 @@ import uuid
 
 _bibliothek_jobs = {}  # job_id -> {"status", "fortschritt", "gesamt", "fehler", "abschnitte_gespeichert"}
 
+MAX_BILDBREITE = 2000  # px - reicht für gute OCR-Qualität, spart auf schwacher Hardware enorm Zeit
+
+def _bild_verkleinern(bild):
+    if bild.width > MAX_BILDBREITE:
+        verhaeltnis = MAX_BILDBREITE / bild.width
+        neue_hoehe = int(bild.height * verhaeltnis)
+        bild = bild.resize((MAX_BILDBREITE, neue_hoehe), Image.LANCZOS)
+    return bild
+
 def _bibliothek_job_verarbeiten(job_id, dateien_daten, quelle_titel, quelle_typ, kapitel_override):
     """Läuft im Hintergrund-Thread, damit die HTTP-Anfrage nicht auf Minuten wartet und in ein Timeout läuft."""
     job = _bibliothek_jobs[job_id]
@@ -3379,10 +3388,12 @@ def _bibliothek_job_verarbeiten(job_id, dateien_daten, quelle_titel, quelle_typ,
         seiten_texte = []
         for i, (bytes_daten, mimetype, filename) in enumerate(dateien_daten):
             if mimetype == "application/pdf" or filename.lower().endswith(".pdf"):
-                for seite in convert_from_bytes(bytes_daten, dpi=200):
+                for seite in convert_from_bytes(bytes_daten, dpi=150):
+                    seite = _bild_verkleinern(seite)
                     seiten_texte.append(pytesseract.image_to_string(seite, lang="deu"))
             else:
                 bild = Image.open(BytesIO(bytes_daten))
+                bild = _bild_verkleinern(bild)
                 seiten_texte.append(pytesseract.image_to_string(bild, lang="deu"))
             job["fortschritt"] = i + 1
 
