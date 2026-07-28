@@ -3381,13 +3381,16 @@ def _bild_verkleinern(bild):
         bild = bild.resize((MAX_BILDBREITE, neue_hoehe), Image.LANCZOS)
     return bild
 
-def _bibliothek_job_verarbeiten(job_id, dateien_daten, quelle_titel, quelle_typ, kapitel_override):
-    """Läuft im Hintergrund-Thread, damit die HTTP-Anfrage nicht auf Minuten wartet und in ein Timeout läuft."""
+def _bibliothek_job_verarbeiten(job_id, dateipfade, quelle_titel, quelle_typ, kapitel_override):
+    """Läuft im Hintergrund-Thread. Verarbeitet Dateien einzeln von der Festplatte
+    (nicht alle gleichzeitig im RAM), damit der schwache Free-Tier-Server nicht überlastet."""
     job = _bibliothek_jobs[job_id]
     try:
         seiten_texte = []
-        for i, (bytes_daten, mimetype, filename) in enumerate(dateien_daten):
-            if mimetype == "application/pdf" or filename.lower().endswith(".pdf"):
+        for i, (pfad, mimetype) in enumerate(dateipfade):
+            with open(pfad, "rb") as f:
+                bytes_daten = f.read()
+            if mimetype == "application/pdf" or pfad.lower().endswith(".pdf"):
                 for seite in convert_from_bytes(bytes_daten, dpi=150):
                     seite = _bild_verkleinern(seite)
                     seiten_texte.append(pytesseract.image_to_string(seite, lang="deu"))
@@ -3395,6 +3398,7 @@ def _bibliothek_job_verarbeiten(job_id, dateien_daten, quelle_titel, quelle_typ,
                 bild = Image.open(BytesIO(bytes_daten))
                 bild = _bild_verkleinern(bild)
                 seiten_texte.append(pytesseract.image_to_string(bild, lang="deu"))
+            os.remove(pfad)  # fertig verarbeitete Datei sofort löschen, um Platz zu sparen
             job["fortschritt"] = i + 1
 
         chunks = _bibliothek_chunking(seiten_texte)
@@ -3420,26 +3424,40 @@ def _bibliothek_job_verarbeiten(job_id, dateien_daten, quelle_titel, quelle_typ,
     except Exception as e:
         job["fehler"].append(str(e))
         job["status"] = "fehler"
+    finally:
+        tmp_ordner = os.path.dirname(dateipfade[0][0]) if dateipfade else None
+        if tmp_ordner and os.path.isdir(tmp_ordner):
+            try:
+                os.rmdir(tmp_ordner)
+            except OSError:
+                pass  # noch Dateien drin (z.B. bei Fehler mittendrin) - kein Beinbruch, /tmp räumt sich selbst
 
 @app.route("/bibliothek/upload", methods=["POST"])
 def bibliothek_upload():
-    """Nimmt 1 PDF oder mehrere Einzelbilder entgegen, startet die Verarbeitung im Hintergrund
-    (OCR + Chunking + Embeddings dauern bei vielen Seiten mehrere Minuten -> kein Request-Timeout)."""
+    """Nimmt 1 PDF oder mehrere Einzelbilder entgegen, schreibt sie auf die Festplatte
+    (nicht in den RAM, wichtig bei vielen/großen Dateien auf schwacher Hardware) und
+    startet die Verarbeitung im Hintergrund."""
     dateien = request.files.getlist("file")
     if not dateien:
         return jsonify({"success": False, "error": "Keine Datei(en) mitgeschickt (Feld 'file')"})
 
-    # Bytes jetzt schon auslesen, bevor der Request-Kontext nach der Antwort verschwindet
-    dateien_daten = [(d.read(), d.mimetype, d.filename) for d in dateien]
-
     job_id = str(uuid.uuid4())
+    tmp_ordner = f"/tmp/bibliothek_{job_id}"
+    os.makedirs(tmp_ordner, exist_ok=True)
+
+    dateipfade = []
+    for i, d in enumerate(dateien):
+        pfad = os.path.join(tmp_ordner, f"{i:04d}_{d.filename}")
+        d.save(pfad)  # streamt direkt auf Platte, ohne alles in den RAM zu laden
+        dateipfade.append((pfad, d.mimetype))
+
     _bibliothek_jobs[job_id] = {
-        "status": "läuft", "fortschritt": 0, "gesamt": len(dateien_daten),
+        "status": "läuft", "fortschritt": 0, "gesamt": len(dateipfade),
         "gesamt_abschnitte": None, "abschnitte_gespeichert": 0, "fehler": []
     }
 
     thread = threading.Thread(target=_bibliothek_job_verarbeiten, args=(
-        job_id, dateien_daten,
+        job_id, dateipfade,
         request.form.get("quelle_titel", "Unbenannt"),
         request.form.get("quelle_typ", "buch"),
         request.form.get("kapitel")
