@@ -863,23 +863,31 @@ def geschenk_senden():
     """Sammelversand: alle freigegebenen Leads mit E-Mail-Adresse via Make raus."""
     rows = sb_get("geschenk_leads",
         "select=*&mail_status=eq.freigegeben&contact_email=neq.&order=created_at.asc") or []
-    gesendet = 0
+    gesendet, fehlgeschlagen = 0, 0
     for lead in rows:
+        webhook_ok = False
         if MAKE_WEBHOOK_URL:
             try:
-                requests.post(MAKE_WEBHOOK_URL, json={
+                r = requests.post(MAKE_WEBHOOK_URL, json={
                     "action": "send_email",
                     "betreff": lead.get("email_betreff", ""),
                     "email": lead.get("email_draft", ""),
                     "recipient": lead.get("contact_email", ""),
                     "timestamp": datetime.now().isoformat()
                 }, timeout=10)
+                r.raise_for_status()
+                webhook_ok = True
             except Exception:
-                continue
-        sb_update("geschenk_leads", f"id=eq.{lead['id']}",
-                  {"mail_status": "gesendet", "gesendet_am": datetime.now().isoformat()})
-        gesendet += 1
-    return jsonify({"success": True, "gesendet": gesendet})
+                webhook_ok = False
+
+        if webhook_ok:
+            sb_update("geschenk_leads", f"id=eq.{lead['id']}",
+                      {"mail_status": "gesendet", "gesendet_am": datetime.now().isoformat()})
+            gesendet += 1
+        else:
+            sb_update("geschenk_leads", f"id=eq.{lead['id']}", {"mail_status": "webhook_fehler"})
+            fehlgeschlagen += 1
+    return jsonify({"success": True, "gesendet": gesendet, "fehlgeschlagen": fehlgeschlagen})
 
 @app.route("/geschenk/zielgruppen", methods=["GET"])
 def geschenk_zielgruppen():
@@ -1047,22 +1055,31 @@ def approve():
     lead_id = data.get("lead_id", "")
     email_draft = data.get("email_draft", "")
     recipient = data.get("contact_email", "")
-    
+
+    webhook_ok = False
+    fehler_text = None
     if MAKE_WEBHOOK_URL:
         try:
-            requests.post(MAKE_WEBHOOK_URL, json={
+            r = requests.post(MAKE_WEBHOOK_URL, json={
                 "action": "send_email",
                 "email": email_draft,
                 "recipient": recipient,
                 "timestamp": datetime.now().isoformat()
             }, timeout=10)
-        except:
-            pass
-    
+            r.raise_for_status()
+            webhook_ok = True
+        except Exception as e:
+            fehler_text = str(e)
+    else:
+        fehler_text = "Kein MAKE_WEBHOOK_URL konfiguriert"
+
     if lead_id:
-        sb_update("leads", f"id=eq.{lead_id}", {"status": "approved"})
-    
-    return jsonify({"success": True})
+        if webhook_ok:
+            sb_update("leads", f"id=eq.{lead_id}", {"status": "approved"})
+        else:
+            sb_update("leads", f"id=eq.{lead_id}", {"status": "webhook_fehler"})
+
+    return jsonify({"success": webhook_ok, "error": fehler_text})
 
 @app.route("/reject", methods=["POST"])
 def reject():
@@ -3314,24 +3331,33 @@ def blog_run():
 # ════════════════════════════════════════
 
 MAX_CHUNK_WORDS = 2000  # harte Obergrenze pro Abschnitt, falls ein Kapitel sehr lang ist
+MIN_CHUNK_WORDS = 150   # unter dieser Größe wird ein erkannter Abschnitt mit dem laufenden
+                        # zusammengelegt, damit OCR-Störsignale (Seitenzahlen, Bildunterschriften)
+                        # nicht zu hunderten Mini-Chunks führen
 
 def _ist_ueberschrift(zeile):
     zeile = zeile.strip()
-    if not (3 <= len(zeile) <= 60):
+    if not (3 <= len(zeile) <= 50):
         return False
-    if zeile and zeile[-1] in ".,;:":
+    if zeile[-1] in ".,;:":
         return False
-    return len(zeile.split()) <= 6
+    if zeile.replace(" ", "").isdigit():  # reine Seitenzahl, keine Überschrift
+        return False
+    woerter = zeile.split()
+    return 1 <= len(woerter) <= 5
 
 from PIL import Image
 from io import BytesIO
 
 def _bibliothek_chunking(seiten_texte):
-    """Zerlegt anhand erkannter Zwischenüberschriften statt starrer Wortzahl,
-    damit z.B. der Varroa-Abschnitt als eigener, in sich geschlossener Chunk
-    erhalten bleibt, egal wie kurz er ist."""
+    """Zerlegt anhand erkannter Zwischenüberschriften, aber erst wenn der laufende
+    Abschnitt schon MIN_CHUNK_WORDS erreicht hat - so werden einzelne OCR-Störsignale
+    nicht als eigene Mini-Chunks abgetrennt, sondern bleiben Teil des Abschnitts."""
     chunks = []
     aktuelle_ueberschrift, aktuelle_zeilen, start_seite = None, [], 0
+
+    def woerter_anzahl():
+        return len(" ".join(aktuelle_zeilen).split())
 
     def flush(end_seite):
         if not aktuelle_zeilen:
@@ -3350,22 +3376,31 @@ def _bibliothek_chunking(seiten_texte):
 
     for seiten_num, text in enumerate(seiten_texte):
         for zeile in text.split("\n"):
-            if _ist_ueberschrift(zeile):
+            if _ist_ueberschrift(zeile) and woerter_anzahl() >= MIN_CHUNK_WORDS:
                 flush(seiten_num)
                 aktuelle_ueberschrift = zeile.strip()
                 aktuelle_zeilen = []
                 start_seite = seiten_num
+            elif _ist_ueberschrift(zeile) and aktuelle_ueberschrift is None:
+                aktuelle_ueberschrift = zeile.strip()
             else:
                 aktuelle_zeilen.append(zeile)
     flush(len(seiten_texte) - 1)
     return chunks
 
-def _voyage_embedding(text):
-    r = requests.post("https://api.voyageai.com/v1/embeddings",
-        headers={"Authorization": f"Bearer {VOYAGE_API_KEY}", "Content-Type": "application/json"},
-        json={"input": [text], "model": "voyage-3.5", "input_type": "document"}, timeout=30)
-    r.raise_for_status()
-    return r.json()["data"][0]["embedding"]
+def _voyage_embedding(text, versuche=3):
+    letzter_fehler = None
+    for versuch in range(versuche):
+        try:
+            r = requests.post("https://api.voyageai.com/v1/embeddings",
+                headers={"Authorization": f"Bearer {VOYAGE_API_KEY}", "Content-Type": "application/json"},
+                json={"input": [text], "model": "voyage-3.5", "input_type": "document"}, timeout=30)
+            r.raise_for_status()
+            return r.json()["data"][0]["embedding"]
+        except Exception as e:
+            letzter_fehler = e
+            time.sleep(2 * (versuch + 1))  # kurze, steigende Pause bei Rate-Limits
+    raise letzter_fehler
 
 import threading
 import uuid
